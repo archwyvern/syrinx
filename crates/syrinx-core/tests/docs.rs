@@ -30,3 +30,12 @@ fn core_module_is_exactly_the_tagged_declarations() {
     // The tag is metadata, not prose: it never reaches a reader.
     assert!(docs.groups.iter().flat_map(|g| g.entries.iter()).all(|e| !e.doc.contains("@core")));
 }
+
+/// What `"syrinx"` exports at run time is the core and nothing else (SPEC.md, clause 12). The
+/// framework is imported by relative path; a name that crept back into the prelude would let a
+/// source depend on the framework without saying so.
+#[test]
+fn the_core_module_exports_the_core() {
+    let names = syrinx_core::prelude_exports().unwrap();
+    assert_eq!(names, ["BLOCK_FRAMES", "PRELUDE_VERSION", "Random", "hash", "inBlock"]);
+}

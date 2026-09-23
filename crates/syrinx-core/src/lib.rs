@@ -23,14 +23,16 @@ use std::time::Duration;
 pub use check::Diagnostic;
 pub use host::{Mixer, Source, Stem, Stream, PRELUDE_SPECIFIER};
 #[doc(hidden)]
-pub use host::standard_block_frames;
+pub use host::{prelude_exports, standard_block_frames};
 
 /// Version of the source contract and prelude: what `meta.api` is checked against. Bump for any
-/// change to the standard, so caches keyed on it invalidate; 3 is additive over 2 (streams).
-pub const PRELUDE_VERSION: u32 = 3;
+/// change to the standard, so caches keyed on it invalidate. 4 is syrinx 1.0: the prelude is the
+/// core alone, and every source declares the contract it was written against.
+pub const PRELUDE_VERSION: u32 = 4;
 
-/// The oldest `meta.api` this compiler accepts: every api-2 source is a valid api-3 source.
-pub const API_FLOOR: u32 = 2;
+/// The oldest `meta.api` this compiler accepts. 1.0 broke with everything before it, so nothing
+/// older is a valid source.
+pub const API_FLOOR: u32 = 4;
 
 /// Frames per block of a stream. A constant of the standard, pinned to the prelude's and the
 /// run wrapper's `BLOCK_FRAMES` by a test; the last block of a sound is shorter.

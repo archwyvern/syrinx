@@ -20,9 +20,10 @@
 // block's first frame (0, BLOCK_FRAMES, 2 * BLOCK_FRAMES, ...), which derives the block's length
 // itself, so a host cannot pull a wrong-sized block, and refuses an offset out of sequence, so a
 // host bug fails loudly instead of rendering something. Around every block call the flag behind
-// `__syrinx.block` is raised: the prelude's whole-render helpers (normalize, fade, place) read it
-// and refuse inside a block. The global is frozen and the getter reads a variable of this scope,
-// so nothing outside this file can set it.
+// `__syrinx.block` is raised: the prelude's `inBlock()` reads it, and code that needs the whole
+// render (the framework's normalize, fade and place) asks that and refuses inside a block. The
+// global is frozen and the getter reads a variable of this scope, so nothing outside this file
+// can set it.
 //
 // The mix stage is classified by a probe. Called with `buffers === null`, `mix` hands the default
 // export a `ctx.stems` whose getters record the read and then throw. Read: it is a whole-buffer
