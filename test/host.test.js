@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,7 +39,14 @@ function project(files) {
   return root;
 }
 
-const TONE = 'export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
+/** A project with the framework vendored at ./framework, as `syrinx framework` would leave it. */
+function withFramework(files) {
+  const root = project(files);
+  cpSync(join(REPO, "framework"), join(root, "framework"), { recursive: true });
+  return root;
+}
+
+const TONE = 'export const meta = { api: 4, name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
   + "export const stems = { t: (ctx) => new Float32Array(ctx.frames) };\n";
 
 test("a source renders and reports what it declared", async () => {
@@ -70,7 +77,7 @@ test("imports are reported, and a module imported twice is one instance", async 
     "lib/shared.js": "let n = 0;\nn += 1;\nexport const evaluations = n;\n",
     "a.syr": 'import { evaluations } from "./lib/shared.js";\n'
       + 'import { evaluations as again } from "./lib/shared.js";\n'
-      + 'export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
+      + 'export const meta = { api: 4, name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
       + "export const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(evaluations + again) };\n",
   });
 
@@ -147,7 +154,7 @@ test("a side-effect import is loaded, jailed and reported like any other", async
     "side.js": 'import { seen } from "./state.js";\nseen.push(1);\n',
     "a.syr": 'import "./side.js";\n'
       + 'import { seen } from "./state.js";\n'
-      + 'export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
+      + 'export const meta = { api: 4, name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
       + "export const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(seen.length) };\n",
   });
 
@@ -174,9 +181,40 @@ test("a bare specifier other than syrinx is refused", async () => {
   await assert.rejects(
     () => render({ path: join(root, "a.syr"), root }),
     (err) => {
-      assert.match(err.message, /only "syrinx" and relative paths are importable/);
+      assert.equal(err.kind, "compile");
+      assert.equal(err.message, 'cannot import "node:fs": only "syrinx" and relative paths can be imported');
       return true;
     });
+});
+
+test("an import that cannot resolve fails the same way on both hosts, naming the importer", async () => {
+  for (const [line, message] of [
+    ['import x from "lodash";', 'cannot import "lodash": only "syrinx" and relative paths can be imported'],
+    ['import x from "./nope.js";', 'cannot import "./nope.js": no such file'],
+    ['import "./lib/missing.js";', 'cannot import "./lib/missing.js": no such file'],
+  ]) {
+    const root = project({ "a.syr": `${line}\n${TONE}` });
+    await assert.rejects(() => render({ path: join(root, "a.syr"), root }), (err) => {
+      assert.equal(err.kind, "compile");
+      assert.equal(err.message, message);
+      assert.ok(err.file.endsWith("a.syr"), `the error names the importing module: ${err.file}`);
+      return true;
+    });
+    assert.match(rustRefusal(join(root, "a.syr")) ?? "", new RegExp(`compile error: ${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  }
+});
+
+test("a framework name taken from the core is a compile error naming it, on both hosts", async () => {
+  // The mistake every 0.x source makes on 1.0. The Rust host's V8 names the module as the source
+  // wrote it; the Node host maps its own URL for the prelude back to "syrinx" so the two agree.
+  const root = project({ "a.syr": 'import { Osc } from "syrinx";\n' + TONE });
+  const message = "The requested module 'syrinx' does not provide an export named 'Osc'";
+  await assert.rejects(() => render({ path: join(root, "a.syr"), root }), (err) => {
+    assert.equal(err.kind, "compile");
+    assert.match(err.message, new RegExp(message));
+    return true;
+  });
+  assert.match(rustRefusal(join(root, "a.syr")) ?? "", new RegExp(message));
 });
 
 test("a source that never finishes is stopped, not merely abandoned", async () => {
@@ -184,7 +222,7 @@ test("a source that never finishes is stopped, not merely abandoned", async () =
   // loop kept running; `worker.terminate()` is what actually stops it, and the process exiting
   // cleanly after this test is the evidence.
   const root = project({
-    "spin.syr": 'export const meta = { name: "spin", duration: 0.01, channels: 1, seed: 1 };\n'
+    "spin.syr": 'export const meta = { api: 4, name: "spin", duration: 0.01, channels: 1, seed: 1 };\n'
       + "export const stems = { spin: (ctx) => { for (;;) {} } };\n",
   });
 
@@ -201,7 +239,7 @@ test("a source that never finishes is stopped, not merely abandoned", async () =
 
 test("a source with no layers is a contract error naming the fix", async () => {
   const root = project({
-    "a.syr": 'export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1 };\n',
+    "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.01, channels: 1, seed: 1 };\n',
   });
   await assert.rejects(
     () => render({ path: join(root, "a.syr"), root }),
@@ -216,7 +254,7 @@ test("a source with no layers is a contract error naming the fix", async () => {
 test("a source on the old contract is told what changed, not merely refused", async () => {
   // The break's whole error path: a default export and nothing else used to BE a sound.
   const root = project({
-    "a.syr": 'export const meta = { name: "t", duration: 0.01 };\n'
+    "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.01 };\n'
       + "export default (ctx) => new Float32Array(ctx.frames);\n",
   });
   await assert.rejects(
@@ -229,7 +267,7 @@ test("a source on the old contract is told what changed, not merely refused", as
 
 test("a source that throws reports the throw, positioned at the source", async () => {
   const root = project({
-    "a.syr": 'export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
+    "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
       + 'export const stems = { t: () => { throw new Error("boom"); } };\n',
   });
   await assert.rejects(
@@ -247,9 +285,9 @@ test("a layer that streams renders block by block to what render() gives", async
   // The same stateful per-sample function through render() and through stream(): the block
   // driver in the worker must pull the same blocks in the same order as the Rust host, and both
   // must equal the whole render.
-  const root = project({
-    "a.syr": 'import { Osc, Biquad, render, stream } from "syrinx";\n'
-      + 'export const meta = { name: "t", duration: 0.3, channels: 1, seed: 1 };\n'
+  const root = withFramework({
+    "a.syr": 'import { Osc, Biquad, render, stream } from "./framework/dsp.js";\n'
+      + 'export const meta = { api: 4, name: "t", duration: 0.3, channels: 1, seed: 1 };\n'
       + "const voice = (ctx) => { const o = Osc.saw(ctx.sr); const f = Biquad.lowpass(ctx.sr, 900, 2); return (t) => f.process(o.next(110 + 40 * t)); };\n"
       + "export const stems = { whole: (ctx) => render(ctx, voice(ctx)), streamed: (ctx) => stream(ctx, voice(ctx)) };\n",
   });
@@ -277,7 +315,7 @@ test("the mix stage is classified by the probe, the same way as the Rust host", 
   ];
   for (const [layer, mix, streaming] of cases) {
     const root = project({
-      "a.syr": 'export const meta = { name: "t", duration: 0.2, channels: 1, seed: 1 };\n'
+      "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.2, channels: 1, seed: 1 };\n'
         + `export const stems = { ${layer} };\n${mix}\n`,
     });
     const r = await render({ path: join(root, "a.syr"), root });
@@ -289,7 +327,7 @@ test("the mix stage is classified by the probe, the same way as the Rust host", 
 
 test("a mix that reads ctx.stems and returns a stream names the mistake, on both hosts", async () => {
   const root = project({
-    "a.syr": 'export const meta = { name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
+    "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
       + "export const stems = { a(ctx) { return new Float32Array(ctx.frames); } };\n"
       + "export default function (ctx) { let p; try { p = ctx.stems.a[0][0]; } catch (e) {} return (offset, frames, { a }) => a[0]; }\n",
   });
@@ -304,9 +342,9 @@ test("a mix that reads ctx.stems and returns a stream names the mistake, on both
 
 test("the whole-render helpers refuse inside a block, on both hosts", async () => {
   for (const [call, fix] of [["normalize(out)", /limiter/], ["fade(ctx, out, 0.01, 0.01)", /Env\.gate/], ["place(ctx, out, 0)", /- offset/]]) {
-    const root = project({
-      "a.syr": 'import { normalize, fade, place } from "syrinx";\n'
-        + 'export const meta = { name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
+    const root = withFramework({
+      "a.syr": 'import { normalize, fade, place } from "./framework/dsp.js";\n'
+        + 'export const meta = { api: 4, name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
         + `export const stems = { a(ctx) { return (offset, frames) => { const out = new Float32Array(frames); return ${call}; }; } };\n`,
     });
     await assert.rejects(() => render({ path: join(root, "a.syr"), root }), (err) => {
@@ -323,7 +361,7 @@ test("the whole-render helpers refuse inside a block, on both hosts", async () =
 
 test("a block of the wrong length is refused, on both hosts", async () => {
   const root = project({
-    "a.syr": 'export const meta = { name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
+    "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
       + "export const stems = { a(ctx) { return (offset, frames) => new Float32Array(frames + 1); } };\n",
   });
   await assert.rejects(() => render({ path: join(root, "a.syr"), root }), (err) => {
@@ -338,7 +376,7 @@ test("a subset sums in declaration order whatever order was asked", async () => 
   // first they do not. Declaration order is big, tiny1, tiny2, so the sum is exactly 1.0 either
   // way the subset is written.
   const root = project({
-    "a.syr": 'export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
+    "a.syr": 'export const meta = { api: 4, name: "t", duration: 0.01, channels: 1, seed: 1 };\n'
       + "export const stems = {\n"
       + "  big(ctx) { return new Float32Array(ctx.frames).fill(1); },\n"
       + "  tiny1(ctx) { return new Float32Array(ctx.frames).fill(Math.pow(2, -24)); },\n"
@@ -352,10 +390,10 @@ test("a subset sums in declaration order whatever order was asked", async () => 
   await assert.rejects(() => render({ path: join(root, "a.syr"), root, stems: ["big", "big"] }), /selected twice/);
 });
 
-test("meta.api 2 and 3 are accepted and 1 is refused, as the Rust host does", async () => {
-  for (const [api, ok] of [[2, true], [3, true], [1, false], [4, false]]) {
+test("meta.api 4 is accepted and anything else refused, as the Rust host does", async () => {
+  for (const [api, ok] of [[4, true], [3, false], [5, false], [1, false]]) {
     const root = project({
-      "a.syr": `export const meta = { name: "t", duration: 0.01, channels: 1, seed: 1, api: ${api} };\n`
+      "a.syr": `export const meta = { api: ${api}, name: "t", duration: 0.01, channels: 1, seed: 1 };\n`
         + "export const stems = { t: (ctx) => new Float32Array(ctx.frames) };\n",
     });
     if (ok) {
@@ -364,10 +402,10 @@ test("meta.api 2 and 3 are accepted and 1 is refused, as the Rust host does", as
     } else {
       await assert.rejects(() => render({ path: join(root, "a.syr"), root }), (err) => {
         assert.equal(err.kind, "contract");
-        assert.match(err.message, /accepts 2 to 3/);
+        assert.match(err.message, /accepts 4 to 4/);
         return true;
       });
-      assert.match(rustRefusal(join(root, "a.syr")) ?? "", /accepts 2 to 3/);
+      assert.match(rustRefusal(join(root, "a.syr")) ?? "", /accepts 4 to 4/);
     }
   }
 });

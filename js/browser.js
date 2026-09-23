@@ -19,7 +19,7 @@
 // own isolate), and terminating a worker that runs past its budget. `examples/` render through
 // this host byte for byte as they do through the CLI; test/browser.test.js is the proof.
 
-import { ContractError, geometry, readMeta, readStems } from "./contract.js";
+import { API_FLOOR, ContractError, PRELUDE_VERSION as HOST_VERSION, geometry, readMeta, readStems } from "./contract.js";
 import { SyrinxError } from "./error.js";
 
 export { SyrinxError };
@@ -38,6 +38,13 @@ export async function open({ entry, math, run, prelude, sampleRate = 0 }) {
     throw new SyrinxError("internal", `${run} is not the run wrapper as a module (export default <run.js>)`);
   }
   const { PRELUDE_VERSION } = await import(/* @vite-ignore */ /* webpackIgnore: true */ prelude);
+  // The runtime is whatever the page was handed -- a release may carry its own -- and this host
+  // calls its run wrapper the way its own contract says. A runtime of any other contract is
+  // refused by name before a source is linked against it, not driven and hoped for.
+  if (!(Number.isInteger(PRELUDE_VERSION) && PRELUDE_VERSION >= API_FLOOR && PRELUDE_VERSION <= HOST_VERSION)) {
+    throw new SyrinxError("contract",
+      `the runtime at ${prelude} is api ${PRELUDE_VERSION}; this host implements api ${API_FLOOR} to ${HOST_VERSION}`, entry);
+  }
 
   let module;
   try {
@@ -74,7 +81,7 @@ export async function open({ entry, math, run, prelude, sampleRate = 0 }) {
 
   return {
     meta,
-    name: meta.name ?? "",
+    name: meta.name,
     loop: meta.loop,
     names,
     sampleRate: rate,

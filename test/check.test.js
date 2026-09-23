@@ -31,7 +31,7 @@ const CLI = process.env.SYRINX_CLI ?? join(REPO, "target", "release", "syrinx");
  * the interesting text first so its line numbers read as written.
  */
 function asModule(body) {
-  return body + '\nexport const meta = { name: "fixture", duration: 0.01, channels: 1, seed: 1 };\n'
+  return body + '\nexport const meta = { api: 4, name: "fixture", duration: 0.01, channels: 1, seed: 1 };\n'
     + "export const stems = { fixture: (ctx) => new Float32Array(ctx.frames) };\n";
 }
 

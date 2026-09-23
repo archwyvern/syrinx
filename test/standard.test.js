@@ -21,7 +21,7 @@ const CLI = process.env.SYRINX_CLI ?? join(REPO, "target", "release", "syrinx");
 function source(body) {
   const root = mkdtempSync(join(tmpdir(), "syrinx-standard-"));
   const path = join(root, "s.syr");
-  writeFileSync(path, 'export const meta = { name: "s", duration: 0.01, channels: 1, seed: 1 };\n' + body);
+  writeFileSync(path, 'export const meta = { api: 4, name: "s", duration: 0.01, channels: 1, seed: 1 };\n' + body);
   return { root, path };
 }
 

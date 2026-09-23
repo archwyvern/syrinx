@@ -34,6 +34,7 @@
       "default": "./js/browser.js"
     },
     "./check": "./js/check.js",
+    "./imports": "./js/imports.js",
     "./prelude": "./prelude/prelude.js",
     "./prelude/prelude.js": "./prelude/prelude.js",
     "./prelude/math.js": "./prelude/math.js",

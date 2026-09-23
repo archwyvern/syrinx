@@ -63,6 +63,11 @@ export interface RenderOptions {
   sampleRate?: number;
   /** Wall-clock budget; the default matches the Rust host's. */
   timeoutMs?: number;
+  /**
+   * Render only these layers, summed in declaration order whatever order they are named in,
+   * without the mix stage. Null or empty renders the whole sound.
+   */
+  stems?: string[] | null;
 }
 
 export interface RenderedSound {
@@ -75,10 +80,17 @@ export interface RenderedSound {
   /** Seconds, as `meta` declared. */
   duration: number;
   loop: boolean;
-  name: string;
+  /** The declared name; undefined when the source declares none (there is no default). */
+  name?: string;
   seed: number;
   /** Every file the source imported, transitively, as absolute canonical paths. */
   dependencies: string[];
+  /** The layer this is, for one layer of `renderEach`; null for a mix or a summed subset. */
+  stem: string | null;
+  /** Every layer the source declares, in declaration order. */
+  stemNames: string[];
+  /** Whether the source has a default export combining its layers; without one the mix is their sum. */
+  hasMix: boolean;
   /**
    * Whether the samples were produced one block at a time: the layer streamed, or the mix stage
    * streamed. The bytes are the same either way; this says which form the source took.
@@ -87,6 +99,37 @@ export interface RenderedSound {
   /** Wall time the render took. */
   elapsedMs: number;
 }
+
+/** What a source declares, as `inspect` reports it without rendering anything. */
+export interface Inspected {
+  meta: {
+    /** Undefined when the source declares none: there is no default. */
+    name?: string;
+    duration: number;
+    channels: number;
+    /** The rate it would render at: the options' rate, else its own, else 48000. */
+    sampleRate: number;
+    seed: number;
+    loop: boolean;
+  };
+  /** Its layers, in declaration order. */
+  stems: string[];
+  hasMix: boolean;
+  /** Every file it imports, transitively, as absolute canonical paths. */
+  dependencies: string[];
+}
+
+/** Runs the determinism check and the module graph and reads the contract, rendering nothing. */
+export function inspect(options: RenderOptions): Promise<Inspected>;
+
+/** Renders layers separately, one worker each; all of them when `stems` is null or empty. */
+export function renderEach(options: RenderOptions): Promise<RenderedSound[]>;
+
+/**
+ * Runs only the mix stage, over layers rendered earlier: interleaved samples by layer name, every
+ * declared layer present and nothing else.
+ */
+export function mixFrom(options: Omit<RenderOptions, "stems"> & { stems: Record<string, Float32Array> }): Promise<RenderedSound>;
 
 /**
  * Renders a sound source to interleaved samples.

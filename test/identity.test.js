@@ -29,6 +29,8 @@ import { render, renderEach } from "../js/index.js";
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLI = process.env.SYRINX_CLI ?? join(REPO, "target", "release", "syrinx");
 const EXAMPLES = join(REPO, "examples");
+// The examples are a project whose framework is the repository's own ../framework, so the jail is
+// the repository: the same shape as an album with its vendored copy beside its tracks.
 
 /** The Rust host's samples, via the CLI's raw float output. */
 function rustSamples(sourcePath, extra = []) {
@@ -76,7 +78,7 @@ for (const file of examples) {
   test(`byte identity: ${file}`, async () => {
     const sourcePath = join(EXAMPLES, file);
     const theirs = rustSamples(sourcePath);
-    const mine = await render({ path: sourcePath, root: EXAMPLES });
+    const mine = await render({ path: sourcePath, root: REPO });
 
     assert.equal(mine.samples.length, theirs.length,
       `sample counts differ: js ${mine.samples.length} (${mine.frames} frames x ${mine.channels} ch @ ${mine.sampleRate}) vs rust ${theirs.length}`);
@@ -92,7 +94,7 @@ for (const file of examples) {
     // so each one has to be identical across the hosts in its own right -- and a mix that agreed
     // while its layers did not would mean two compensating differences, which is worse than one.
     const sourcePath = join(EXAMPLES, file);
-    const layers = await renderEach({ path: sourcePath, root: EXAMPLES });
+    const layers = await renderEach({ path: sourcePath, root: REPO });
     assert.ok(layers.length > 0, `${file} declares no layers`);
     for (const layer of layers) {
       const theirs = rustSamples(sourcePath, ["--stem", layer.stem]);
@@ -109,10 +111,10 @@ test("a streaming example is in the suite, and is seen as one", async () => {
   // The identity claim covers streams only while an example streams. If beacon.syr were ever
   // rewritten whole, every comparison above would still pass and cover nothing of the block
   // driver; this is what says so.
-  const layers = await renderEach({ path: join(EXAMPLES, "beacon.syr"), root: EXAMPLES });
+  const layers = await renderEach({ path: join(EXAMPLES, "beacon.syr"), root: REPO });
   assert.ok(layers.some((l) => l.streaming), "beacon.syr must have a streaming layer");
   assert.ok(layers.some((l) => !l.streaming), "and a whole one beside it");
-  const mixed = await render({ path: join(EXAMPLES, "beacon.syr"), root: EXAMPLES });
+  const mixed = await render({ path: join(EXAMPLES, "beacon.syr"), root: REPO });
   assert.equal(mixed.streaming, true, "and a mix stream");
 });
 
@@ -121,9 +123,9 @@ test("summing the layers here gives the mix the Rust host produced", async () =>
   // host, summed by this host, must equal the mix the other host computed from its own layers.
   const file = examples.find((f) => f !== undefined);
   const sourcePath = join(EXAMPLES, file);
-  const info = await renderEach({ path: sourcePath, root: EXAMPLES });
+  const info = await renderEach({ path: sourcePath, root: REPO });
   const theirs = rustSamples(sourcePath, ...(info.length > 1 ? [[]] : [[]]));
-  const mine = await render({ path: sourcePath, root: EXAMPLES });
+  const mine = await render({ path: sourcePath, root: REPO });
   assert.equal(compare(mine.samples, theirs).differing, 0);
 });
 
@@ -133,7 +135,7 @@ test("the comparison can actually see a difference", async () => {
   // one sample by a single float32 ulp — far finer than 16-bit resolution, whatever the sample's
   // magnitude — must be caught.
   const sourcePath = join(EXAMPLES, examples[0]);
-  const mine = await render({ path: sourcePath, root: EXAMPLES });
+  const mine = await render({ path: sourcePath, root: REPO });
   const theirs = rustSamples(sourcePath);
   assert.equal(compare(mine.samples, theirs).differing, 0, "control precondition: the two must match first");
 
@@ -152,7 +154,7 @@ test("a source that breaks the determinism check is refused, with its position",
   // sounds like: a source one accepts and the other rejects is a worse failure than a numeric
   // difference, because it is silent until the other host runs.
   const bad = join(mkdtempSync(join(tmpdir(), "syrinx-bad-")), "bad.syr");
-  const source = 'export const meta = { name: "bad", duration: 0.01, channels: 1, seed: 1 };\n'
+  const source = 'export const meta = { api: 4, name: "bad", duration: 0.01, channels: 1, seed: 1 };\n'
     + "export const stems = { bad: (ctx) => Math.random() };\n";
   const { writeFileSync } = await import("node:fs");
   writeFileSync(bad, source);

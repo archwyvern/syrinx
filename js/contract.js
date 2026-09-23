@@ -5,8 +5,11 @@
 // `geometry` in host.rs), and a source one host accepts and another refuses is a divergence even
 // when neither renders a wrong sample. Pure: no I/O, no engine, nothing but the module namespace.
 
-/** The oldest contract a source may declare; api 3 is additive over 2 (API_FLOOR in lib.rs). */
-export const API_FLOOR = 2;
+/** The contract this host implements (PRELUDE_VERSION in lib.rs and the prelude). */
+export const PRELUDE_VERSION = 4;
+
+/** The oldest contract a source may declare (API_FLOOR in lib.rs): 1.0 broke with all before it. */
+export const API_FLOOR = 4;
 
 /** A source that breaks the contract. The message is the one every host reports. */
 export class ContractError extends Error {
@@ -19,12 +22,10 @@ export class ContractError extends Error {
 /**
  * The source's `meta`, validated field by field exactly as the Rust host's `read_meta`: the same
  * checks, in the same order, with the same messages. A field set to `undefined` counts as absent,
- * as it does there.
+ * as it does there. `preludeVersion` is the contract of the prelude the source was linked against.
  *
- * Returns the fields the host uses, normalised: `seed` becomes an unsigned 32-bit integer the way
- * the reference converts it -- a saturating cast (`f64 as u32`: truncated toward zero, NaN and
- * anything negative 0, anything too large 4294967295), NOT `>>> 0`, which wraps; two hosts
- * converting a seed differently hand a source two different seeds.
+ * Returns the fields the host uses; an absent name stays absent (there is no default), and the
+ * seed is the integer the source wrote, never a conversion of something else.
  */
 export function readMeta(module, preludeVersion) {
   const meta = module.meta;
@@ -35,12 +36,14 @@ export function readMeta(module, preludeVersion) {
   const field = (key) => (meta[key] === undefined ? undefined : meta[key]);
 
   const api = field("api");
-  if (api !== undefined) {
-    const n = typeof api === "number" ? api : -1;
-    if (!(n >= API_FLOOR && n <= preludeVersion) || !Number.isInteger(n)) {
-      throw new ContractError(
-        `source declares meta.api ${String(api)} but this compiler provides api ${preludeVersion} and accepts ${API_FLOOR} to ${preludeVersion}`);
-    }
+  if (api === undefined) {
+    throw new ContractError(
+      `meta.api is required: this compiler provides api ${preludeVersion} and accepts ${API_FLOOR} to ${preludeVersion}`);
+  }
+  const n = typeof api === "number" ? api : -1;
+  if (!(n >= API_FLOOR && n <= preludeVersion) || !Number.isInteger(n)) {
+    throw new ContractError(
+      `source declares meta.api ${String(api)} but this compiler provides api ${preludeVersion} and accepts ${API_FLOOR} to ${preludeVersion}`);
   }
   const name = field("name");
   if (name !== undefined && typeof name !== "string") throw new ContractError("meta.name must be a string");
@@ -63,17 +66,13 @@ export function readMeta(module, preludeVersion) {
   }
   const seed = field("seed") === undefined ? 0 : field("seed");
   if (typeof seed !== "number") throw new ContractError("meta.seed must be a number");
+  if (!(Number.isInteger(seed) && seed >= 0 && seed <= 4294967295)) {
+    throw new ContractError("meta.seed must be an integer in [0, 4294967295]");
+  }
   const loop = field("loop") === undefined ? false : field("loop");
   if (typeof loop !== "boolean") throw new ContractError("meta.loop must be a boolean");
 
-  return { api, name, duration, channels, sampleRate, seed: saturatingU32(seed), loop };
-}
-
-/** Rust's `f64 as u32`: NaN and negatives to 0, overflow to the maximum, otherwise truncated. */
-export function saturatingU32(x) {
-  if (!(x > 0)) return 0;
-  if (x >= 4294967295) return 4294967295;
-  return Math.trunc(x);
+  return { api, name, duration, channels, sampleRate, seed, loop };
 }
 
 /**

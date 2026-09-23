@@ -22,9 +22,10 @@ export interface OpenUrls {
 export type Planes = Float32Array[];
 
 export interface OpenSource {
-  /** The source's `meta` as the host read it: validated, `seed` converted, absent fields undefined. */
-  meta: { api?: number; name?: string; duration: number; channels: 1 | 2; sampleRate?: number; seed: number; loop: boolean };
-  name: string;
+  /** The source's `meta` as the host read it: validated, absent fields undefined. */
+  meta: { api: number; name?: string; duration: number; channels: 1 | 2; sampleRate?: number; seed: number; loop: boolean };
+  /** The declared name; undefined when the source declares none (there is no default). */
+  name?: string;
   loop: boolean;
   /** Layer names, in declaration order. */
   names: string[];
@@ -46,5 +47,8 @@ export interface OpenSource {
   mixWhole(planes: Planes[]): Planes;
 }
 
-/** Opens a source in the current realm: math, run wrapper, prelude, then the source. */
+/**
+ * Opens a source in the current realm: math, run wrapper, prelude, then the source. Refuses
+ * (kind `contract`) a runtime whose prelude is outside this host's contract range.
+ */
 export function open(urls: OpenUrls): Promise<OpenSource>;

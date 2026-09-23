@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { rewriteImports } from "../js/imports.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 
@@ -41,24 +42,33 @@ function rustSamples(sourcePath) {
 }
 
 /**
- * The examples as a page would serve them: `"syrinx"` rewritten to the prelude's URL, relative
- * imports left relative (they resolve to files beside them), sources renamed to .mjs so the realm
- * loads them as modules. A fixture rewrite, not a general one: the examples import in one form.
+ * The examples and the framework they import, as a page would serve them: every module's
+ * `"syrinx"` rewritten to the prelude's URL by syrinx/imports, relative imports left relative (they
+ * resolve to files beside them), sources renamed to .mjs so the realm loads them as modules.
+ * Returns the served examples directory.
  */
 function served() {
   const dir = mkdtempSync(join(tmpdir(), "syrinx-browser-src-"));
-  cpSync(EXAMPLES, dir, { recursive: true, filter: (p) => !p.includes("/out") });
+  cpSync(EXAMPLES, join(dir, "examples"), { recursive: true, filter: (p) => !p.includes("/out") });
+  cpSync(join(REPO, "framework"), join(dir, "framework"), { recursive: true });
   writeFileSync(join(dir, "package.json"), '{ "type": "module" }\n');
   const rewrite = (file) => {
-    const text = readFileSync(file, "utf8").replaceAll('from "syrinx"', `from ${JSON.stringify(PRELUDE)}`);
+    const text = rewriteImports(readFileSync(file, "utf8"), (s) => (s === "syrinx" ? PRELUDE : s));
     writeFileSync(file, text);
   };
-  for (const f of readdirSync(join(dir, "lib"))) rewrite(join(dir, "lib", f));
-  for (const f of readdirSync(dir).filter((f) => f.endsWith(".syr"))) {
-    rewrite(join(dir, f));
-    renameSync(join(dir, f), join(dir, f.replace(/\.syr$/, ".mjs")));
-  }
-  return dir;
+  const walk = (at) => {
+    for (const f of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, f.name);
+      if (f.isDirectory()) walk(path);
+      else if (f.name.endsWith(".js")) rewrite(path);
+      else if (f.name.endsWith(".syr")) {
+        rewrite(path);
+        renameSync(path, path.replace(/\.syr$/, ".mjs"));
+      }
+    }
+  };
+  walk(dir);
+  return join(dir, "examples");
 }
 
 /** Renders a source in a fresh worker through browser.js, interleaved. */
@@ -124,7 +134,7 @@ test("every example renders through the browser host exactly as through the CLI"
 test("a broken contract is reported with the message every host gives", async () => {
   const dir = mkdtempSync(join(tmpdir(), "syrinx-browser-contract-"));
   const entry = join(dir, "bad.mjs");
-  writeFileSync(entry, "export const meta = { duration: 1 };\nexport const stems = { \"1a\": () => [0] };\n");
+  writeFileSync(entry, "export const meta = { api: 4, duration: 1 };\nexport const stems = { \"1a\": () => [0] };\n");
   const code = `
     import { parentPort, workerData } from "node:worker_threads";
     import { open } from ${JSON.stringify(pathToFileURL(join(REPO, "js", "browser.js")).href)};

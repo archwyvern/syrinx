@@ -13,8 +13,9 @@ import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { parentPort, workerData } from "node:worker_threads";
-import { check, strip } from "./check.js";
+import { check } from "./check.js";
 import { ContractError, geometry, readMeta, readStems } from "./contract.js";
+import { rewriteImports, scanImports } from "./imports.js";
 
 // The standard math goes in FIRST, in this worker's own realm, before the module graph is even
 // read: a module compiled before it would still see the engine's Math. It is a classic script,
@@ -63,33 +64,37 @@ function fail(kind, message, file = null, line = 0, column = 0) {
 }
 
 /**
- * Resolves one import, enforcing the jail. Mirrors host.rs: canonicalise, then require the result
+ * An import that cannot be resolved: a `compile` error naming the module that asked, with the
+ * reference's message for the way it failed (loader.rs gives the same four).
+ */
+function unresolved(specifier, importerPath, why) {
+  return Object.assign(new Error(`cannot import "${specifier}": ${why}`), { kind: "compile", file: importerPath });
+}
+
+/**
+ * Resolves one import, enforcing the jail. Mirrors loader.rs: canonicalise, then require the result
  * to be under the root. Canonicalisation is what makes it a jail rather than a prefix test — a
  * symlink out of the tree resolves to where it points, not to where it sits.
  */
 async function resolveImport(specifier, importerPath, root, dependencies) {
   if (specifier === "syrinx") return workerData.preludeUrl;
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-    throw Object.assign(new Error(
-      `cannot import "${specifier}" from ${importerPath}: only "syrinx" and relative paths are importable`),
-      { kind: "compile" });
+    throw unresolved(specifier, importerPath, 'only "syrinx" and relative paths can be imported');
   }
   const candidate = resolve(dirname(importerPath), specifier);
   let resolved;
   try {
     resolved = await realpath(candidate);
-  } catch {
-    throw Object.assign(new Error(`cannot import "${specifier}" from ${importerPath}: ${candidate} does not exist`),
-      { kind: "compile" });
+  } catch (err) {
+    const missing = err.code === "ENOENT" || err.code === "ENOTDIR";
+    throw unresolved(specifier, importerPath, missing ? "no such file" : "it cannot be resolved");
   }
   // Containment is COMPONENT-WISE, as Rust's `Path::starts_with` is. A bare string prefix test
   // lets `/home/u/warren2/lib.js` through a jail rooted at `/home/u/warren` — any sibling whose
   // name merely begins with the root's — which the Rust host refuses. Two hosts disagreeing about
   // what is reachable is worse than either answer alone.
   if (root !== null && !(resolved === root || resolved.startsWith(root + sep))) {
-    throw Object.assign(new Error(
-      `cannot import "${specifier}" from ${importerPath}: ${resolved} is outside the project root ${root}`),
-      { kind: "compile" });
+    throw unresolved(specifier, importerPath, `${resolved} is outside the project root ${root}`);
   }
   dependencies.add(resolved);
   return pathToFileURL(resolved).href;
@@ -107,12 +112,19 @@ async function resolveImport(specifier, importerPath, root, dependencies) {
  * entry in Node's registry. That is observable: a module holding state would otherwise render
  * differently depending on how many times it was reached.
  */
-async function load(entryPath, entrySource, root, dependencies, cache) {
+async function load(entryPath, entrySource, root, dependencies, cache, via = null) {
   const canonical = await realpath(entryPath);
   const cached = cache.get(canonical);
   if (cached) return cached;
 
-  const source = entrySource ?? await readFile(canonical, "utf-8");
+  let source = entrySource;
+  if (source === null) {
+    try {
+      source = await readFile(canonical, "utf-8");
+    } catch {
+      throw unresolved(via.specifier, via.importer, `${canonical} cannot be read`);
+    }
+  }
   const problems = check(source);
   if (problems.length > 0) {
     const first = problems[0];
@@ -120,45 +132,19 @@ async function load(entryPath, entrySource, root, dependencies, cache) {
       { kind: "check", file: canonical, line: first.line, column: first.column });
   }
 
-  // Both static import forms: `... from "x"` (which also covers `export ... from "x"`) and the
-  // side-effect `import "x"`. The Rust host loads whatever V8's resolve callback is handed, so
-  // omitting the side-effect form would make a legal source work there and fail here — a silent
-  // divergence on valid code, which is the failure this package most needs to avoid.
-  //
-  // Dynamic `import()` is not rewritten and not supported, on EITHER host: the Rust side has no
-  // dynamic-import callback installed, so a source using it fails there too. That is a shared
-  // limitation rather than a divergence.
-  //
-  // The scan runs over the source with comments and string literals blanked, because prose is not
-  // an import: `// vowel sliding from "a" to "o"` is a comment, and scanning raw text would try to
-  // resolve "a" and fail the compile on a source the Rust host accepts without complaint -- Rust is
-  // handed real module records by V8's parser and never pattern-matches text.
-  //
-  // strip() is asked to preserve UTF-16 length rather than its usual scalar count, so a match's
-  // index is an index into `source` itself and the original can be spliced at it. With the scalar
-  // count every astral character inside a preceding literal would shift the splice by one.
-  const IMPORTS = /(\bfrom\s*|\bimport\s+)(["'])([^"']+)\2/g;
-  const scanned = strip(source, { preserveUtf16: true, keepStrings: true });
-  const matches = [...scanned.matchAll(IMPORTS)];
-  const specifiers = [...new Set(matches.map((m) => m[3]))];
+  // The imports, found and spliced by syrinx/imports: both static forms, comments skipped, the
+  // original text kept everywhere but the specifiers. Dynamic `import()` is not rewritten and not
+  // supported, on EITHER host: the Rust side installs no dynamic-import callback, so a source using
+  // it fails there too -- a shared limitation rather than a divergence.
+  const specifiers = [...new Set(scanImports(source).map((i) => i.specifier))];
   const urls = new Map();
   for (const specifier of specifiers) {
     const resolved = await resolveImport(specifier, canonical, root, dependencies);
     urls.set(specifier, specifier === "syrinx"
       ? resolved
-      : await load(fileURLToPath(resolved), null, root, dependencies, cache));
+      : await load(fileURLToPath(resolved), null, root, dependencies, cache, { specifier, importer: canonical }));
   }
-  // One pass over the original, splicing at the positions the scan found, so a specifier that
-  // happens to contain another cannot be rewritten twice.
-  let rewritten = "";
-  let at = 0;
-  for (const m of matches) {
-    const url = urls.get(m[3]);
-    if (url === undefined) continue;
-    rewritten += source.slice(at, m.index) + m[1] + JSON.stringify(url);
-    at = m.index + m[0].length;
-  }
-  rewritten += source.slice(at);
+  const rewritten = rewriteImports(source, (specifier) => urls.get(specifier));
 
   const url = "data:text/javascript;base64," + Buffer.from(rewritten, "utf-8").toString("base64");
   cache.set(canonical, url);
@@ -173,7 +159,11 @@ async function prepare() {
   try {
     module = await import(await load(sourcePath, source, root, dependencies, new Map()));
   } catch (err) {
-    return { failure: fail(err.kind ?? "compile", err.message, err.file ?? sourcePath, err.line ?? 0, err.column ?? 0) };
+    // A link error names the module it could not link against by the URL it was loaded from. For
+    // the prelude that URL is this host's own business: the source wrote "syrinx", and the Rust
+    // host's message says "syrinx" too.
+    const message = String(err.message).replaceAll(workerData.preludeUrl, "syrinx");
+    return { failure: fail(err.kind ?? "compile", message, err.file ?? sourcePath, err.line ?? 0, err.column ?? 0) };
   }
 
   // The contract is read by the module every host shares (contract.js): meta, then the layers,
@@ -206,7 +196,7 @@ async function prepare() {
 function declared(prepared) {
   return {
     ok: true,
-    name: prepared.meta.name ?? "",
+    name: prepared.meta.name,
     duration: prepared.meta.duration,
     seed: prepared.meta.seed,
     loop: prepared.meta.loop,
