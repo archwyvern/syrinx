@@ -218,7 +218,7 @@ impl StemFile {
     /// the current frontier: a file fills front to back, in order, from one writer.
     pub fn write_frames(&self, first_frame: usize, samples: &[f32]) -> Result<()> {
         let ch = self.channels as usize;
-        if samples.len() % ch != 0 {
+        if !samples.len().is_multiple_of(ch) {
             bail!("{} samples is not a whole number of {ch}-channel frames", samples.len());
         }
         if first_frame != self.frontier.load(Ordering::Acquire) {
@@ -346,15 +346,15 @@ mod tests {
         let dep = dir.join("x.js");
         fs::write(&dep, b"export const A = 1;").unwrap();
         let source = b"import { A } from './x.js';";
-        let k1 = key(source, &[dep.clone()], 48_000).unwrap();
-        let again = key(source, &[dep.clone()], 48_000).unwrap();
+        let k1 = key(source, std::slice::from_ref(&dep), 48_000).unwrap();
+        let again = key(source, std::slice::from_ref(&dep), 48_000).unwrap();
         assert_eq!(k1, again, "the same bytes must give the same key");
 
         fs::write(&dep, b"export const A = 2;").unwrap();
-        let k2 = key(source, &[dep.clone()], 48_000).unwrap();
+        let k2 = key(source, std::slice::from_ref(&dep), 48_000).unwrap();
         assert_ne!(k1, k2, "an edited import must change the key");
 
-        let k3 = key(b"import { A } from './x.js'; ", &[dep.clone()], 48_000).unwrap();
+        let k3 = key(b"import { A } from './x.js'; ", std::slice::from_ref(&dep), 48_000).unwrap();
         assert_ne!(k2, k3, "an edited source must change the key");
 
         let k4 = key(source, &[dep], 44_100).unwrap();

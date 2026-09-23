@@ -217,10 +217,10 @@ impl PlayerApp {
             if let Some(i) = first {
                 self.play(i);
             }
-        } else if self.track.is_none() {
-            if let Some(i) = first {
-                self.play(i);
-            }
+        } else if self.track.is_none()
+            && let Some(i) = first
+        {
+            self.play(i);
         }
     }
 
@@ -249,14 +249,14 @@ impl PlayerApp {
         // Faders survive a reload of the same file, by layer name.
         let previous = self.gains.take().zip(self.track.take());
         let gains = Arc::new(Gains::new(track.stem_names.len()));
-        if let Some((old_gains, old_track)) = previous {
-            if old_track.path == track.path {
-                for (n, name) in track.stem_names.iter().enumerate() {
-                    if let Some(o) = old_track.stem_names.iter().position(|s| s == name) {
-                        gains.set_gain(n, old_gains.gain(o));
-                        gains.set_mute(n, old_gains.muted(o));
-                        gains.set_solo(n, old_gains.soloed(o));
-                    }
+        if let Some((old_gains, old_track)) = previous
+            && old_track.path == track.path
+        {
+            for (n, name) in track.stem_names.iter().enumerate() {
+                if let Some(o) = old_track.stem_names.iter().position(|s| s == name) {
+                    gains.set_gain(n, old_gains.gain(o));
+                    gains.set_mute(n, old_gains.muted(o));
+                    gains.set_solo(n, old_gains.soloed(o));
                 }
             }
         }
@@ -335,10 +335,10 @@ impl PlayerApp {
         let dir = track.dir.clone();
         drop(track);
         let _ = std::fs::remove_dir_all(&dir);
-        if let Some(i) = i {
-            if let Err(e) = self.load(i, position) {
-                self.playlist.rows[i].error = Some(format!("{e:#}"));
-            }
+        if let Some(i) = i
+            && let Err(e) = self.load(i, position)
+        {
+            self.playlist.rows[i].error = Some(format!("{e:#}"));
         }
     }
 
@@ -415,14 +415,9 @@ impl PlayerApp {
     fn poll(&mut self) {
         self.poll_inspects();
 
-        loop {
-            match self.requests.try_recv() {
-                Ok(request) => {
-                    self.add_paths(&request.paths, request.replace);
-                    self.ctx.send_viewport_cmd(ViewportCommand::Focus);
-                }
-                Err(_) => break,
-            }
+        while let Ok(request) = self.requests.try_recv() {
+            self.add_paths(&request.paths, request.replace);
+            self.ctx.send_viewport_cmd(ViewportCommand::Focus);
         }
 
         let device_error = self.output_error.lock().unwrap().take();
@@ -463,10 +458,10 @@ impl PlayerApp {
             }
         }
 
-        if let Some((_, since)) = &self.note {
-            if since.elapsed() > Duration::from_secs(8) {
-                self.note = None;
-            }
+        if let Some((_, since)) = &self.note
+            && since.elapsed() > Duration::from_secs(8)
+        {
+            self.note = None;
         }
     }
 
@@ -506,20 +501,20 @@ impl PlayerApp {
             let on = !self.settings.loop_track;
             self.set_loop(on);
         }
-        if pressed(Key::N, Modifiers::NONE) {
-            if let Some(next) = self.playlist.next() {
-                self.play(next);
-            }
+        if pressed(Key::N, Modifiers::NONE)
+            && let Some(next) = self.playlist.next()
+        {
+            self.play(next);
         }
-        if pressed(Key::P, Modifiers::NONE) {
-            if let Some(prev) = self.playlist.prev() {
-                self.play(prev);
-            }
+        if pressed(Key::P, Modifiers::NONE)
+            && let Some(prev) = self.playlist.prev()
+        {
+            self.play(prev);
         }
-        if pressed(Key::Delete, Modifiers::NONE) {
-            if let Some(i) = self.selected {
-                self.remove_row(i);
-            }
+        if pressed(Key::Delete, Modifiers::NONE)
+            && let Some(i) = self.selected
+        {
+            self.remove_row(i);
         }
         if pressed(Key::O, Modifiers::NONE) {
             self.dialog.pick_multiple();
@@ -527,10 +522,10 @@ impl PlayerApp {
         if pressed(Key::R, Modifiers::NONE) {
             self.rerender();
         }
-        if pressed(Key::Enter, Modifiers::NONE) {
-            if let Some(i) = self.selected {
-                self.play(i);
-            }
+        if pressed(Key::Enter, Modifiers::NONE)
+            && let Some(i) = self.selected
+        {
+            self.play(i);
         }
     }
 
@@ -685,11 +680,11 @@ impl PlayerApp {
                 Stroke::new(2.0, theme::PLAYHEAD),
             );
         }
-        if response.clicked() || response.dragged() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                let fraction = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-                self.seek((fraction as f64 * track.frames as f64) as usize);
-            }
+        if (response.clicked() || response.dragged())
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let fraction = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            self.seek((fraction as f64 * track.frames as f64) as usize);
         }
     }
 
@@ -746,10 +741,9 @@ impl PlayerApp {
                 .add_enabled(self.playlist.prev().is_some(), egui::Button::new("\u{23ee}"))
                 .on_hover_text("Previous (P)")
                 .clicked()
+                && let Some(prev) = self.playlist.prev()
             {
-                if let Some(prev) = self.playlist.prev() {
-                    self.play(prev);
-                }
+                self.play(prev);
             }
             let play_label = if playing && has_track { "\u{23f8}" } else { "\u{25b6}" };
             if ui
@@ -769,10 +763,9 @@ impl PlayerApp {
                 .add_enabled(self.playlist.next().is_some(), egui::Button::new("\u{23ed}"))
                 .on_hover_text("Next (N)")
                 .clicked()
+                && let Some(next) = self.playlist.next()
             {
-                if let Some(next) = self.playlist.next() {
-                    self.play(next);
-                }
+                self.play(next);
             }
             ui.add_space(8.0);
             let time = match &self.track {
@@ -914,10 +907,10 @@ impl PlayerApp {
         if self.mixer.status.master_bypassed.load(Ordering::Relaxed) {
             parts.push("master bypassed while faders are moved".into());
         }
-        if let Some(out) = &self.output {
-            if out.sample_rate != track.sample_rate {
-                parts.push(format!("resampling to {} Hz", out.sample_rate));
-            }
+        if let Some(out) = &self.output
+            && out.sample_rate != track.sample_rate
+        {
+            parts.push(format!("resampling to {} Hz", out.sample_rate));
         }
         (parts.join("  \u{00b7}  "), theme::LABEL)
     }
@@ -984,10 +977,10 @@ fn open_output(
     match Output::open(wanted, Arc::clone(shared), on_error.clone()) {
         Ok((output, producer)) => (Some(output), producer, None),
         Err(first) => {
-            if wanted.is_some() {
-                if let Ok((output, producer)) = Output::open(None, Arc::clone(shared), on_error) {
-                    return (Some(output), producer, Some(format!("{first:#}; using the default device")));
-                }
+            if wanted.is_some()
+                && let Ok((output, producer)) = Output::open(None, Arc::clone(shared), on_error)
+            {
+                return (Some(output), producer, Some(format!("{first:#}; using the default device")));
             }
             let (producer, _consumer) = rtrb::RingBuffer::<f32>::new(1);
             (None, producer, Some(format!("no audio output: {first:#}")))

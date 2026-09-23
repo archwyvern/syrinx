@@ -174,9 +174,10 @@ mod tests {
 
     #[test]
     fn remove_keeps_current_pointing_at_the_same_row() {
-        let mut p = Playlist::default();
-        p.rows = ["a", "b", "c"].iter().map(|n| Row::new(PathBuf::from(format!("/t/{n}.syr")))).collect();
-        p.current = Some(2);
+        let mut p = Playlist {
+            rows: ["a", "b", "c"].iter().map(|n| Row::new(PathBuf::from(format!("/t/{n}.syr")))).collect(),
+            current: Some(2),
+        };
         p.remove(0);
         assert_eq!(p.current, Some(1));
         assert_eq!(p.rows[1].name, "c");

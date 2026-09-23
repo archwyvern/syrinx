@@ -35,11 +35,12 @@ impl Watch {
         let set: HashSet<PathBuf> = files.iter().cloned().collect();
         let (tx, rx) = mpsc::channel();
         let handler = move |result: notify::Result<Event>| {
-            if let Ok(event) = result {
-                if is_change(&event.kind) && event.paths.iter().any(|p| is_relevant(p, &set)) {
-                    let _ = tx.send(Instant::now());
-                    repaint();
-                }
+            if let Ok(event) = result
+                && is_change(&event.kind)
+                && event.paths.iter().any(|p| is_relevant(p, &set))
+            {
+                let _ = tx.send(Instant::now());
+                repaint();
             }
         };
         let mut watcher =

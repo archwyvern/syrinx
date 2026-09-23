@@ -143,7 +143,7 @@ impl Output {
         };
         let error = move |e: cpal::Error| on_error(e.to_string());
         let stream = device
-            .build_output_stream(config.clone(), data, error, Some(Duration::from_secs(2)))
+            .build_output_stream(config, data, error, Some(Duration::from_secs(2)))
             .context("opening the output stream")?;
         stream.play().context("starting the output stream")?;
         Ok((

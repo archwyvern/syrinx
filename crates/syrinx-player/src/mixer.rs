@@ -379,18 +379,17 @@ impl Worker {
             }
             Command::Loop(on) => {
                 self.loop_on = on;
-                if on {
-                    if let Some(l) = self.loaded.as_mut() {
-                        if l.ended {
-                            // The track had ended; looping means it starts again.
-                            l.position = 0;
-                            l.skip = 0;
-                            l.live_started = false;
-                            l.ended = false;
-                            l.pushed = self.shared.consumed.load(Ordering::Relaxed);
-                            self.begin();
-                        }
-                    }
+                if on
+                    && let Some(l) = self.loaded.as_mut()
+                    && l.ended
+                {
+                    // The track had ended; looping means it starts again.
+                    l.position = 0;
+                    l.skip = 0;
+                    l.live_started = false;
+                    l.ended = false;
+                    l.pushed = self.shared.consumed.load(Ordering::Relaxed);
+                    self.begin();
                 }
             }
             Command::Output { producer, sample_rate, channels } => {
@@ -733,21 +732,23 @@ mod tests {
                 chunk.commit_all();
                 shared.consumed.fetch_add((n / 2) as u64, Ordering::Relaxed);
             }
-            if let (Some(frame), false) = (seek_to, seek_sent) {
-                if out.len() >= 4096 * 2 * 4 {
-                    // A second of the start has played; now the seek, and forget what came before.
-                    handle.send(Command::Seek(frame));
-                    seek_sent = true;
-                    out.clear();
-                    std::thread::sleep(Duration::from_millis(100));
-                    continue;
-                }
+            if let (Some(frame), false) = (seek_to, seek_sent)
+                && out.len() >= 4096 * 2 * 4
+            {
+                // A second of the start has played; now the seek, and forget what came before.
+                handle.send(Command::Seek(frame));
+                seek_sent = true;
+                out.clear();
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
             }
             let finished = shared.finished_at.load(Ordering::Relaxed);
-            if finished != u64::MAX && shared.consumed.load(Ordering::Relaxed) >= finished && consumer.slots() == 0 {
-                if seek_to.is_none() || seek_sent {
-                    break;
-                }
+            if finished != u64::MAX
+                && shared.consumed.load(Ordering::Relaxed) >= finished
+                && consumer.slots() == 0
+                && (seek_to.is_none() || seek_sent)
+            {
+                break;
             }
             if !until_end && seek_sent && out.len() >= 48_000 * 2 {
                 break;
