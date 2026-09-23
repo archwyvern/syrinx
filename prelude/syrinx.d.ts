@@ -9,7 +9,10 @@
 
 // ---------------------------------------------------------------- The source contract
 
-/** What a source declares about itself. */
+/**
+ * What a source declares about itself.
+ * @core
+ */
 export interface Meta {
   /** Display name; defaults to the file stem. */
   name?: string;
@@ -27,7 +30,10 @@ export interface Meta {
   api?: number;
 }
 
-/** What every layer and the mix are given. */
+/**
+ * What every layer and the mix are given.
+ * @core
+ */
 export interface Context {
   /** Sample rate in Hz. */
   sr: number;
@@ -41,13 +47,19 @@ export interface Context {
   channels: 1 | 2;
 }
 
-/** What a layer is given: the context, plus which layer it is. */
+/**
+ * What a layer is given: the context, plus which layer it is.
+ * @core
+ */
 export interface StemContext extends Context {
   /** This layer's name, as declared in `stems`. */
   stem: string;
 }
 
-/** What the default export is given: the context, plus the rendered layers. */
+/**
+ * What the default export is given: the context, plus the rendered layers.
+ * @core
+ */
 export interface MixContext extends Context {
   /**
    * Each layer by name, as `channels` planes of `frames` samples. Reading one makes the mix
@@ -56,23 +68,36 @@ export interface MixContext extends Context {
   stems: Record<string, Float32Array[]>;
 }
 
-/** What a layer or the mix returns: mono samples, or [left, right]. */
+/**
+ * What a layer or the mix returns: mono samples, or [left, right].
+ * @core
+ */
 export type Output = Float32Array | number[] | [Float32Array | number[], Float32Array | number[]];
 
 /**
  * A streaming layer: called once per block of BLOCK_FRAMES, in order from offset 0 (the last
  * block is shorter), returning exactly `frames` samples per plane. State kept in the closure
  * persists between blocks.
+ * @core
  */
 export type Stream = (offset: number, frames: number) => Output;
 
-/** A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples. */
+/**
+ * A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples.
+ * @core
+ */
 export type MixStream = (offset: number, frames: number, stems: Record<string, Float32Array[]>) => Output;
 
-/** A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order. */
+/**
+ * A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order.
+ * @core
+ */
 export type Stems = Record<string, (ctx: StemContext) => Output | Stream>;
 
-/** The shape of a source module. */
+/**
+ * The shape of a source module.
+ * @core
+ */
 export interface Source {
   meta: Meta;
   stems: Stems;
@@ -81,8 +106,12 @@ export interface Source {
 
 // ---------------------------------------------------------------- Scalars
 
+/** @core */
 export const PRELUDE_VERSION: number;
-/** Frames per block of a stream: a constant of the standard (4096). */
+/**
+ * Frames per block of a stream: a constant of the standard (4096).
+ * @core
+ */
 export const BLOCK_FRAMES: number;
 export const TAU: number;
 
@@ -96,12 +125,18 @@ export function softclip(x: number): number;
 export function hardclip(x: number): number;
 /** Wavefolder: reflects anything outside [-1, 1] back in. */
 export function fold(x: number): number;
-/** FNV-1a over the arguments, as a seed: `new Noise(hash(ctx.seed, "kick"))`. */
+/**
+ * FNV-1a over the arguments, as a seed: `new Noise(hash(ctx.seed, "kick"))`.
+ * @core
+ */
 export function hash(...parts: (number | string)[]): number;
 
 // ---------------------------------------------------------------- Randomness
 
-/** Seeded PRNG (mulberry32). The only randomness a source may use. */
+/**
+ * Seeded PRNG (mulberry32). The only randomness a source may use.
+ * @core
+ */
 export class Random {
   constructor(seed?: number);
   /** [0, 1) */
@@ -256,20 +291,38 @@ export interface Processor {
   process(x: number): number;
 }
 
-/** Run `fn(t, i)` once per frame and collect the result. */
+/**
+ * Run `fn(t, i)` once per frame and collect the result.
+ * @core
+ */
 export function render(ctx: Context, fn: (t: number, i: number) => number): Float32Array;
-/** render(), one block at a time: a stream that is bit-identical to `render(ctx, fn)` over the same frames. */
+/**
+ * render(), one block at a time: a stream that is bit-identical to `render(ctx, fn)` over the same frames.
+ * @core
+ */
 export function stream(ctx: Context, fn: (t: number, i: number) => number): Stream;
-/** Sum buffers sample-wise; the result is as long as the longest. */
+/**
+ * Sum buffers sample-wise; the result is as long as the longest.
+ * @core
+ */
 export function mix(...buffers: ArrayLike<number>[]): Float32Array;
 export function gain(buffer: ArrayLike<number>, g: number): Float32Array;
-/** Scale so the absolute peak hits `peak` (default -1 dBFS). Silence is left alone. Refuses inside a stream's block: use a limiter or a fixed gain. */
+/**
+ * Scale so the absolute peak hits `peak` (default -1 dBFS). Silence is left alone. Refuses inside a stream's block: use a limiter or a fixed gain.
+ * @core
+ */
 export function normalize(buffer: ArrayLike<number>, peak?: number): Float32Array;
-/** Linear fade-in over `fadeIn` seconds and fade-out over `fadeOut` seconds. Refuses inside a stream's block: shape the level from the absolute time. */
+/**
+ * Linear fade-in over `fadeIn` seconds and fade-out over `fadeOut` seconds. Refuses inside a stream's block: shape the level from the absolute time.
+ * @core
+ */
 export function fade(ctx: Context, buffer: ArrayLike<number>, fadeIn: number, fadeOut: number): Float32Array;
 /** Constant-power pan; position in [-1, 1]. */
 export function pan(buffer: ArrayLike<number>, position?: number): [Float32Array, Float32Array];
-/** Place `buffer` into a new ctx.frames-long buffer starting at `at` seconds. Refuses inside a stream's block: copy into the block from `round(at * sr) - offset`. */
+/**
+ * Place `buffer` into a new ctx.frames-long buffer starting at `at` seconds. Refuses inside a stream's block: copy into the block from `round(at * sr) - offset`.
+ * @core
+ */
 export function place(ctx: Context, buffer: ArrayLike<number>, at: number): Float32Array;
 /** Apply a per-sample processor over a buffer. */
 export function filter(buffer: ArrayLike<number>, processor: Processor): Float32Array;

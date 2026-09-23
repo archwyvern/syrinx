@@ -1,7 +1,9 @@
 {
-  "schema": 1,
+  "schema": 2,
   "generator": "syrinx",
   "api": 3,
+  "apiFloor": 2,
+  "blockFrames": 4096,
   "module": "syrinx",
   "summary": "The syrinx module: everything a sound source can import.\n\nA source is an ES module that imports from \"syrinx\", exports `meta` and `stems`, and may\ndefault-export a function combining them. A layer, and the mix, return their samples whole or\nas a stream the host pulls one block at a time. `syrinx types` emits these declarations; point\nan editor at them (a jsconfig.json, or Monaco's addExtraLib) for autocomplete and hover. Sources\nare plain JavaScript -- the types are for tooling, not because anything is compiled from\nTypeScript.",
   "groups": [
@@ -56,7 +58,8 @@
               "signature": "api?: number",
               "doc": "Contract version the source was written against, 2 or 3; compile fails on anything else."
             }
-          ]
+          ],
+          "core": true
         },
         {
           "kind": "interface",
@@ -94,7 +97,8 @@
               "signature": "channels: 1 | 2",
               "doc": "meta.channels."
             }
-          ]
+          ],
+          "core": true
         },
         {
           "kind": "interface",
@@ -108,7 +112,8 @@
               "signature": "stem: string",
               "doc": "This layer's name, as declared in `stems`."
             }
-          ]
+          ],
+          "core": true
         },
         {
           "kind": "interface",
@@ -122,31 +127,36 @@
               "signature": "stems: Record<string, Float32Array[]>",
               "doc": "Each layer by name, as `channels` planes of `frames` samples. Reading one makes the mix\nwhole-buffer; a mix stream never reads it and gets its layers' blocks as its third argument."
             }
-          ]
+          ],
+          "core": true
         },
         {
           "kind": "alias",
           "name": "Output",
           "signature": "export type Output = Float32Array | number[] | [Float32Array | number[], Float32Array | number[]]",
-          "doc": "What a layer or the mix returns: mono samples, or [left, right]."
+          "doc": "What a layer or the mix returns: mono samples, or [left, right].",
+          "core": true
         },
         {
           "kind": "callback",
           "name": "Stream",
           "signature": "export type Stream = (offset: number, frames: number) => Output",
-          "doc": "A streaming layer: called once per block of BLOCK_FRAMES, in order from offset 0 (the last\nblock is shorter), returning exactly `frames` samples per plane. State kept in the closure\npersists between blocks."
+          "doc": "A streaming layer: called once per block of BLOCK_FRAMES, in order from offset 0 (the last\nblock is shorter), returning exactly `frames` samples per plane. State kept in the closure\npersists between blocks.",
+          "core": true
         },
         {
           "kind": "callback",
           "name": "MixStream",
           "signature": "export type MixStream = (offset: number, frames: number, stems: Record<string, Float32Array[]>) => Output",
-          "doc": "A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples."
+          "doc": "A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples.",
+          "core": true
         },
         {
           "kind": "callback",
           "name": "Stems",
           "signature": "export type Stems = Record<string, (ctx: StemContext) => Output | Stream>",
-          "doc": "A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order."
+          "doc": "A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order.",
+          "core": true
         },
         {
           "kind": "interface",
@@ -169,7 +179,8 @@
               "name": "default",
               "signature": "default?: (ctx: MixContext) => Output | MixStream"
             }
-          ]
+          ],
+          "core": true
         }
       ]
     },
@@ -179,62 +190,73 @@
         {
           "kind": "constant",
           "name": "PRELUDE_VERSION",
-          "signature": "export const PRELUDE_VERSION: number"
+          "signature": "export const PRELUDE_VERSION: number",
+          "core": true
         },
         {
           "kind": "constant",
           "name": "BLOCK_FRAMES",
           "signature": "export const BLOCK_FRAMES: number",
-          "doc": "Frames per block of a stream: a constant of the standard (4096)."
+          "doc": "Frames per block of a stream: a constant of the standard (4096).",
+          "core": true
         },
         {
           "kind": "constant",
           "name": "TAU",
-          "signature": "export const TAU: number"
+          "signature": "export const TAU: number",
+          "core": false
         },
         {
           "kind": "function",
           "name": "clamp",
-          "signature": "export function clamp(x: number, lo: number, hi: number): number"
+          "signature": "export function clamp(x: number, lo: number, hi: number): number",
+          "core": false
         },
         {
           "kind": "function",
           "name": "lerp",
-          "signature": "export function lerp(a: number, b: number, t: number): number"
+          "signature": "export function lerp(a: number, b: number, t: number): number",
+          "core": false
         },
         {
           "kind": "function",
           "name": "db",
           "signature": "export function db(decibels: number): number",
-          "doc": "Decibels to linear gain."
+          "doc": "Decibels to linear gain.",
+          "core": false
         },
         {
           "kind": "function",
           "name": "mtof",
           "signature": "export function mtof(midi: number): number",
-          "doc": "MIDI note number to Hz."
+          "doc": "MIDI note number to Hz.",
+          "core": false
         },
         {
           "kind": "function",
           "name": "softclip",
-          "signature": "export function softclip(x: number): number"
+          "signature": "export function softclip(x: number): number",
+          "core": false
         },
         {
           "kind": "function",
           "name": "hardclip",
-          "signature": "export function hardclip(x: number): number"
+          "signature": "export function hardclip(x: number): number",
+          "core": false
         },
         {
           "kind": "function",
           "name": "fold",
           "signature": "export function fold(x: number): number",
-          "doc": "Wavefolder: reflects anything outside [-1, 1] back in."
+          "doc": "Wavefolder: reflects anything outside [-1, 1] back in.",
+          "core": false
         },
         {
           "kind": "function",
           "name": "hash",
           "signature": "export function hash(...parts: (number | string)[]): number",
-          "doc": "FNV-1a over the arguments, as a seed: `new Noise(hash(ctx.seed, \"kick\"))`."
+          "doc": "FNV-1a over the arguments, as a seed: `new Noise(hash(ctx.seed, \"kick\"))`.",
+          "core": true
         }
       ]
     },
@@ -286,7 +308,8 @@
               "name": "pick",
               "signature": "pick<T>(array: readonly T[]): T"
             }
-          ]
+          ],
+          "core": true
         }
       ]
     },
@@ -315,12 +338,14 @@
               "signature": "next(freq: number): number",
               "doc": "Advance one sample at `freq` Hz; returns the phase before advancing."
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "callback",
           "name": "Shape",
-          "signature": "export type Shape = (phase: number, width: number) => number"
+          "signature": "export type Shape = (phase: number, width: number) => number",
+          "core": false
         },
         {
           "kind": "class",
@@ -379,7 +404,8 @@
               "name": "next",
               "signature": "next(freq: number): number"
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "class",
@@ -404,7 +430,8 @@
               "name": "next",
               "signature": "next(freq: number): number"
             }
-          ]
+          ],
+          "core": false
         }
       ]
     },
@@ -440,7 +467,8 @@
               "signature": "brown(): number",
               "doc": "Brown (-6 dB/oct)."
             }
-          ]
+          ],
+          "core": false
         }
       ]
     },
@@ -451,7 +479,8 @@
           "kind": "callback",
           "name": "Envelope",
           "signature": "export type Envelope = (t: number) => number",
-          "doc": "An envelope is a function of time in seconds."
+          "doc": "An envelope is a function of time in seconds.",
+          "core": false
         },
         {
           "kind": "object",
@@ -500,7 +529,8 @@
               "signature": "points(pts: [number, number][]): Envelope",
               "doc": "Piecewise-linear through [[t0, v0], [t1, v1], ...] with ascending times."
             }
-          ]
+          ],
+          "core": false
         }
       ]
     },
@@ -528,7 +558,8 @@
               "name": "hp",
               "signature": "hp(x: number, cutoff: number): number"
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "choice",
@@ -543,7 +574,8 @@
             "peak",
             "lowshelf",
             "highshelf"
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "class",
@@ -596,7 +628,8 @@
               "name": "process",
               "signature": "process(x: number): number"
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "class",
@@ -634,7 +667,8 @@
               "name": "process",
               "signature": "process(x: number): number"
             }
-          ]
+          ],
+          "core": false
         }
       ]
     },
@@ -669,7 +703,8 @@
               "signature": "process(x: number, seconds: number): number",
               "doc": "write then read."
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "class",
@@ -697,7 +732,8 @@
               "name": "process",
               "signature": "process(x: number): number"
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "class",
@@ -719,7 +755,8 @@
               "name": "process",
               "signature": "process(x: number): number"
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "class",
@@ -737,7 +774,8 @@
               "name": "process",
               "signature": "process(x: number): number"
             }
-          ]
+          ],
+          "core": false
         }
       ]
     },
@@ -755,60 +793,70 @@
               "name": "process",
               "signature": "process(x: number): number"
             }
-          ]
+          ],
+          "core": false
         },
         {
           "kind": "function",
           "name": "render",
           "signature": "export function render(ctx: Context, fn: (t: number, i: number) => number): Float32Array",
-          "doc": "Run `fn(t, i)` once per frame and collect the result."
+          "doc": "Run `fn(t, i)` once per frame and collect the result.",
+          "core": true
         },
         {
           "kind": "function",
           "name": "stream",
           "signature": "export function stream(ctx: Context, fn: (t: number, i: number) => number): Stream",
-          "doc": "render(), one block at a time: a stream that is bit-identical to `render(ctx, fn)` over the same frames."
+          "doc": "render(), one block at a time: a stream that is bit-identical to `render(ctx, fn)` over the same frames.",
+          "core": true
         },
         {
           "kind": "function",
           "name": "mix",
           "signature": "export function mix(...buffers: ArrayLike<number>[]): Float32Array",
-          "doc": "Sum buffers sample-wise; the result is as long as the longest."
+          "doc": "Sum buffers sample-wise; the result is as long as the longest.",
+          "core": true
         },
         {
           "kind": "function",
           "name": "gain",
-          "signature": "export function gain(buffer: ArrayLike<number>, g: number): Float32Array"
+          "signature": "export function gain(buffer: ArrayLike<number>, g: number): Float32Array",
+          "core": false
         },
         {
           "kind": "function",
           "name": "normalize",
           "signature": "export function normalize(buffer: ArrayLike<number>, peak?: number): Float32Array",
-          "doc": "Scale so the absolute peak hits `peak` (default -1 dBFS). Silence is left alone. Refuses inside a stream's block: use a limiter or a fixed gain."
+          "doc": "Scale so the absolute peak hits `peak` (default -1 dBFS). Silence is left alone. Refuses inside a stream's block: use a limiter or a fixed gain.",
+          "core": true
         },
         {
           "kind": "function",
           "name": "fade",
           "signature": "export function fade(ctx: Context, buffer: ArrayLike<number>, fadeIn: number, fadeOut: number): Float32Array",
-          "doc": "Linear fade-in over `fadeIn` seconds and fade-out over `fadeOut` seconds. Refuses inside a stream's block: shape the level from the absolute time."
+          "doc": "Linear fade-in over `fadeIn` seconds and fade-out over `fadeOut` seconds. Refuses inside a stream's block: shape the level from the absolute time.",
+          "core": true
         },
         {
           "kind": "function",
           "name": "pan",
           "signature": "export function pan(buffer: ArrayLike<number>, position?: number): [Float32Array, Float32Array]",
-          "doc": "Constant-power pan; position in [-1, 1]."
+          "doc": "Constant-power pan; position in [-1, 1].",
+          "core": false
         },
         {
           "kind": "function",
           "name": "place",
           "signature": "export function place(ctx: Context, buffer: ArrayLike<number>, at: number): Float32Array",
-          "doc": "Place `buffer` into a new ctx.frames-long buffer starting at `at` seconds. Refuses inside a stream's block: copy into the block from `round(at * sr) - offset`."
+          "doc": "Place `buffer` into a new ctx.frames-long buffer starting at `at` seconds. Refuses inside a stream's block: copy into the block from `round(at * sr) - offset`.",
+          "core": true
         },
         {
           "kind": "function",
           "name": "filter",
           "signature": "export function filter(buffer: ArrayLike<number>, processor: Processor): Float32Array",
-          "doc": "Apply a per-sample processor over a buffer."
+          "doc": "Apply a per-sample processor over a buffer.",
+          "core": false
         }
       ]
     }

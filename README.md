@@ -9,6 +9,9 @@ prelude of synthesis primitives and writes out PCM. The same source always produ
 bytes — sources are statically rejected if they touch anything non-deterministic — so sounds
 can live in a repo as code and be baked by a content pipeline like any other asset.
 
+The standard itself -- what a source is and what a host must do with it -- is
+[SPEC.md](SPEC.md); the API reference is generated into [docs/API.md](docs/API.md).
+
 syrinx never plays audio itself. The library only renders, whole or one block at a time; the
 CLI's `play` pipes blocks to whatever system player is on PATH as they are computed, and
 `crates/syrinx-player` is a desktop player built on the same library.
@@ -517,7 +520,8 @@ js/                   the JavaScript hosts (npm package at the repo root): index
                       page; contract.js is what both read off a source, check.js is the check
 test/                 the JS hosts' tests: math identity vs the C reference, Node and browser host vs Rust parity
 tools/fdlibm-ref/     the vendored fdlibm C the math port is checked against (make math-golden)
-docs/syrinx-docs.json the API reference, generated from those declarations
+docs/syrinx-docs.json the API reference, generated from those declarations (make docs); docs/API.md renders it
+SPEC.md               the standard: the source language, the host contract, conformance
 include/syrinx.h     C header
 examples/             sample sources (.syr)
 vlc/                  VLC 3 demux module: play .syr in VLC

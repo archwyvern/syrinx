@@ -5,6 +5,10 @@
 //! structured JSON for a documentation site to render, and checks it against the prelude's real
 //! exports so the two cannot drift apart unnoticed.
 //!
+//! A declaration whose doc comment carries an `@core` line belongs to the standard's core module:
+//! what a conforming host must know about (SPEC.md, clause 12). Everything else is framework. The
+//! tag lives on the declaration so the boundary cannot name an export that no longer exists.
+//!
 //! The parser is deliberately strict: a line it does not recognise is an error, not a skip.
 //! Silently dropping an export would produce documentation that is quietly incomplete, which is
 //! worse than none.
@@ -13,8 +17,8 @@ use serde::Serialize;
 
 use crate::{Error, PRELUDE_VERSION, TYPES};
 
-/// Version of this JSON shape.
-pub const DOCS_SCHEMA: u32 = 1;
+/// Version of this JSON shape. 2 added [`Entry::core`], [`Docs::api_floor`] and [`Docs::block_frames`].
+pub const DOCS_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +77,8 @@ pub struct Entry {
     /// The alternatives of a [`EntryKind::Choice`].
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
+    /// Part of the standard's core module (an `@core` line in its doc comment), not the framework.
+    pub core: bool,
 }
 
 impl Entry {
@@ -97,6 +103,10 @@ pub struct Docs {
     pub generator: &'static str,
     /// The source-contract version these docs describe (`meta.api`).
     pub api: u32,
+    /// The oldest `meta.api` a host accepts; a source may declare anything from here to `api`.
+    pub api_floor: u32,
+    /// Frames per block of a stream, a constant of the standard.
+    pub block_frames: usize,
     /// The module specifier a source imports.
     pub module: &'static str,
     /// Prose from the top of the declarations file.
@@ -164,7 +174,9 @@ pub fn parse(source: &str) -> Result<Docs, Error> {
         let Some(group) = groups.last_mut() else {
             return Err(syntax(at, line, "a declaration before the first `// ---- Section` marker"));
         };
-        let entry = read_entry(line, &mut lines, at, std::mem::take(&mut doc))?;
+        let (prose, core) = core_tag(std::mem::take(&mut doc));
+        let mut entry = read_entry(line, &mut lines, at, prose)?;
+        entry.core = core;
         group.entries.push(entry);
     }
 
@@ -175,6 +187,8 @@ pub fn parse(source: &str) -> Result<Docs, Error> {
         schema: DOCS_SCHEMA,
         generator: "syrinx",
         api: PRELUDE_VERSION,
+        api_floor: crate::API_FLOOR,
+        block_frames: crate::BLOCK_FRAMES,
         module: crate::PRELUDE_SPECIFIER,
         summary: summary.join("\n").trim().to_string(),
         groups,
@@ -185,6 +199,16 @@ type Lines<'a> = std::iter::Peekable<std::iter::Enumerate<std::str::Lines<'a>>>;
 
 fn syntax(line_no: usize, text: &str, what: &str) -> Error {
     Error::contract(format!("syrinx.d.ts:{line_no}: cannot parse {what}: {text}"))
+}
+
+/// Splits an `@core` line out of a doc comment: the prose without it, and whether it was there.
+fn core_tag(doc: String) -> (String, bool) {
+    let core = doc.lines().any(|l| l.trim() == "@core");
+    if !core {
+        return (doc, false);
+    }
+    let prose: Vec<&str> = doc.lines().filter(|l| l.trim() != "@core").collect();
+    (prose.join("\n").trim().to_string(), true)
 }
 
 /// `// ---- Name` introduces a section.
@@ -258,7 +282,7 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
         // `export const Env: {` heads an object literal; the colon belongs to the block that
         // was just consumed, not to the declaration a reader sees.
         let signature = first.trim_end_matches('{').trim().trim_end_matches(':').trim().to_string();
-        return Ok(Entry { kind, name: name.to_string(), signature, doc, members, values: Vec::new() });
+        return Ok(Entry { kind, name: name.to_string(), signature, doc, members, values: Vec::new(), core: false });
     }
 
     // A single declaration, possibly wrapped over several lines until its semicolon.
@@ -274,10 +298,10 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
     let rest = signature.strip_prefix("export ").unwrap_or(&signature);
 
     if let Some(r) = rest.strip_prefix("function ") {
-        return Ok(Entry { kind: EntryKind::Function, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new() });
+        return Ok(Entry { kind: EntryKind::Function, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new(), core: false });
     }
     if let Some(r) = rest.strip_prefix("const ") {
-        return Ok(Entry { kind: EntryKind::Constant, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new() });
+        return Ok(Entry { kind: EntryKind::Constant, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new(), core: false });
     }
     if let Some(r) = rest.strip_prefix("type ") {
         let name = identifier(r).to_string();
@@ -290,7 +314,7 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
         } else {
             EntryKind::Alias
         };
-        return Ok(Entry { kind, name, signature, doc, members: Vec::new(), values });
+        return Ok(Entry { kind, name, signature, doc, members: Vec::new(), values, core: false });
     }
     Err(syntax(at, first, "a top-level declaration"))
 }

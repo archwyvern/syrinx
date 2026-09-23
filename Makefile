@@ -31,7 +31,7 @@ else
   PLAYER := syrinx-player
 endif
 
-.PHONY: all build dist install uninstall install-user uninstall-user test check clean examples
+.PHONY: all build dist install uninstall install-user uninstall-user test check clean examples docs
 
 all: dist
 
@@ -92,6 +92,12 @@ test: build
 check:
 	$(CARGO) clippy --$(PROFILE) --all-targets -- -D warnings
 	$(CARGO) fmt --check
+
+# The generated API reference: the JSON a documentation site renders, and docs/API.md from it. Both are
+# committed; crates/syrinx-core/tests/docs.rs and test/docs.test.js fail when either is behind.
+docs: build
+	$(TARGET_DIR)/$(BIN) docs --out docs/syrinx-docs.json
+	node tools/api-md.mjs docs/syrinx-docs.json docs/API.md
 
 # Render every example into examples/out/ as a smoke test.
 examples: build

@@ -1,6 +1,6 @@
 {
   "name": "syrinx",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Sound sources as JavaScript, compiled to PCM. This package is the JS host; the Rust library and CLI in the same repository are the reference implementation.",
   "license": "MIT",
   "author": "Dominic Grostate",
@@ -39,11 +39,17 @@
     "./prelude/math.js": "./prelude/math.js",
     "./prelude/run.js": "./prelude/run.js",
     "./prelude/run.module.js": "./prelude/run.module.js",
+    "./spec": "./SPEC.md",
+    "./docs": "./docs/syrinx-docs.json",
+    "./prelude/syrinx.d.ts": "./prelude/syrinx.d.ts",
     "./package.json": "./package.json"
   },
   "files": [
     "js",
     "prelude",
+    "docs/syrinx-docs.json",
+    "docs/API.md",
+    "SPEC.md",
     "README.md",
     "LICENSE"
   ],
