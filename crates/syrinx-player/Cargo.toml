@@ -1,0 +1,38 @@
+[package]
+name = "syrinx-player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "A player for syrinx sound sources: a playlist, a fader per layer, rendering as you listen."
+
+[[bin]]
+name = "syrinx-player"
+path = "src/main.rs"
+
+[dependencies]
+syrinx-core = { path = "../syrinx-core" }
+clap.workspace = true
+anyhow.workspace = true
+eframe = { version = "0.36", features = ["persistence"] }
+egui = "0.36"
+egui-file-dialog = "0.15"
+cpal = "0.18"
+rtrb = "0.3"
+rubato = "5"
+notify = "8"
+interprocess = "2"
+dirs = "7"
+blake3 = "1.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2.5"
+# For --screenshot; the same crate and features eframe already builds for the window icon.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+syrinx-exe-resources = { path = "../syrinx-exe-resources" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

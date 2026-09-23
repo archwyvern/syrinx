@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# The MSVC librarian, which cc-rs invokes as `llvm-lib`. Fedora ships it only in the full llvm
+# package, but llvm-ar takes on the librarian's command line when it is INVOKED under that name,
+# and rustup provides an llvm-ar without root:
+#
+#     rustup component add llvm-tools
+#
+# Hence `exec -a`: passing the name through is the whole point, not a detail.
+host=$(rustc -vV | sed -n 's/^host: //p')
+exec -a llvm-lib "$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-ar" "$@"

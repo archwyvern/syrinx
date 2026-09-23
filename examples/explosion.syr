@@ -1,0 +1,37 @@
+// A distant explosion in the three parts the design method names: the thump that gives it size,
+// the noise burst that darkens as it decays, and the tail the space adds.
+//
+// The master is deliberately non-linear -- the thump and the burst are clipped TOGETHER, and the
+// reverb is fed from the clipped sum -- which is exactly the shape stems make safe to keep: the
+// layers stay linear and auditionable, and everything that has to see the sum lives here.
+import { Osc, Noise, Svf, Env, Reverb, render, filter, mix, gain, fade, normalize, softclip } from "syrinx";
+
+export const meta = { name: "explosion", duration: 2.5, channels: 2, seed: 42 };
+
+export const stems = {
+  thump(ctx) {
+    const osc = Osc.sine(ctx.sr);
+    const pitch = Env.sweep(140, 35, 0.25);
+    const amp = Env.ad(0.002, 0.18);
+    return render(ctx, (t) => osc.next(pitch(t)) * amp(t) * 1.2);
+  },
+  burst(ctx) {
+    const noise = new Noise(ctx.seed);
+    const svf = new Svf(ctx.sr);
+    const amp = Env.ad(0.01, 0.55);
+    const cutoff = Env.sweep(6000, 120, 1.2);
+    return render(ctx, (t) => {
+      svf.set(cutoff(t), 0.15);
+      return svf.process(noise.brown() * 3 + noise.white() * 0.6) * amp(t);
+    });
+  },
+};
+
+export default function (ctx) {
+  const { thump, burst } = ctx.stems;
+  const mono = render(ctx, (t, i) => softclip(thump[0][i] + burst[0][i]));
+  const left = new Reverb(ctx.sr, { size: 1.6, damp: 0.5, feedback: 0.86 });
+  const right = new Reverb(ctx.sr, { size: 1.45, damp: 0.5, feedback: 0.86 });
+  const out = [mix(mono, gain(filter(mono, left), 0.35)), mix(mono, gain(filter(mono, right), 0.35))];
+  return out.map((b) => fade(ctx, normalize(b), 0, 0.05));
+}

@@ -1,0 +1,34 @@
+// A looping engine hum: two detuned pulses and a low rumble, through one resonant filter.
+// Everything is periodic in the loop length so the seam is clean.
+//
+// The filter and the wobble are the master's, because they act on the sum: audition `--stem
+// rumble` to hear what is under the pulses, and the mix to hear what the cabinet does to both.
+import { Osc, Noise, Svf, OnePole, render, normalize, db } from "syrinx";
+
+export const meta = { name: "engine", duration: 2.0, channels: 1, loop: true };
+
+const CYCLES = 60;                         // the fundamental completes 60 cycles per loop -> 30 Hz
+
+export const stems = {
+  pulses(ctx) {
+    const f0 = CYCLES / ctx.duration;
+    const a = Osc.pulse(ctx.sr, 0.3);
+    const b = Osc.pulse(ctx.sr, 0.4);
+    return render(ctx, () => a.next(f0) * 0.5 + b.next(f0 * 2.01 - 0.02) * 0.3);
+  },
+  rumble(ctx) {
+    const noise = new Noise(1);
+    const lp = new OnePole(ctx.sr);
+    return render(ctx, () => lp.lp(noise.white(), 90) * 0.8);
+  },
+};
+
+export default function (ctx) {
+  const { pulses, rumble } = ctx.stems;
+  const svf = new Svf(ctx.sr).set(400, 0.6);
+  const wobble = Osc.sine(ctx.sr);         // 2 cycles per loop
+  return normalize(render(ctx, (t, i) => {
+    const w = 0.85 + 0.15 * wobble.next(2 / ctx.duration);
+    return svf.process(pulses[0][i] + rumble[0][i]) * w;
+  }), db(-3));
+}

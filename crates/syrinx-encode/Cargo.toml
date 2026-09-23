@@ -1,0 +1,17 @@
+[package]
+name = "syrinx-encode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Encoders for rendered syrinx sounds: wav, raw float, flac, mp3, ogg vorbis, opus, plus ffmpeg for the rest."
+
+[dependencies]
+syrinx-core = { path = "../syrinx-core" }
+hound.workspace = true
+flacenc = "0.5"
+mp3lame-encoder = "0.2"
+vorbis_rs = "0.5"
+opus = "0.4"
+ogg = "0.9"

@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# clang-cl with one diagnostic downgraded, for cross-building the Windows target.
+#
+# The vendored aotuv Vorbis calls _mm_prefetch(float *, _MM_HINT_NTA), and the intrinsic is
+# declared to take const char *. Handing an address to a prefetch is harmless -- distributions
+# building Vorbis with a modern clang suppress the same diagnostic -- but clang 16 and later
+# make the mismatch an error by default, which stops the crate compiling at all. cargo-xwin
+# overwrites CFLAGS_<target> and only accepts `clang-cl` as its compiler, so shadowing it on
+# PATH is the way in.
+# -MT after cargo-xwin's -MD: the Windows build links the C runtime statically (V8's prebuilt
+# does too), and cargo-xwin overwrites CFLAGS_<target>, so the last flag on the line is the
+# only way to say so. Pair it with RUSTFLAGS="-C target-feature=+crt-static".
+exec /usr/bin/clang-cl -Wno-error=incompatible-pointer-types "$@" -MT

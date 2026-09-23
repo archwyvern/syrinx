@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=syrinx-player
+GenericName=Audio Player
+Comment=Play syrinx sound sources
+Exec=syrinx-player %F
+Icon=syrinx-player
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/x-syrinx;
+StartupWMClass=syrinx-player

@@ -1,0 +1,64 @@
+// A beacon: a low two-tone drone under a ping every half second, through one lowpass and a
+// soft clipper. The example of the streaming forms, so `syrinx play beacon.syr` starts the
+// moment the first block exists rather than after the whole render.
+//
+// Three layers, three forms. `drone` is `stream(ctx, fn)`: render() one block at a time, with
+// the same t and i, so it is bit-identical to the whole render. `hits` is a hand-written stream:
+// setup pre-renders one ping with every whole-buffer helper (normalize included), then the block
+// function copies the part of each ping that overlaps the block -- the shape a scheduler has.
+// `swell` is the api-2 form, a whole buffer, rendered at setup and chopped by the host, legal
+// beside the streams. The master is a mix stream: its filters and clipper persist between
+// blocks, its level is a fixed gain rather than a normalize, because a stream cannot see its
+// peak. Reading ctx.stems here would make it a whole-buffer master; the blocks arrive as the
+// third argument instead.
+import { Osc, Noise, Env, Biquad, OnePole, stream, render, normalize, softclip, hash, mix, gain, filter } from "syrinx";
+
+export const meta = { name: "beacon", duration: 3, channels: 2, seed: 9 };
+
+const PING_EVERY = 0.5;
+
+export const stems = {
+  drone(ctx) {
+    const a = Osc.sine(ctx.sr);
+    const b = Osc.sine(ctx.sr);
+    const lp = new OnePole(ctx.sr);
+    const wobble = Osc.sine(ctx.sr);
+    return stream(ctx, () => {
+      const cutoff = 220 + 120 * wobble.next(0.25);
+      return lp.lp(a.next(55) * 0.5 + b.next(55.7) * 0.4, cutoff) * 0.6;
+    });
+  },
+
+  hits(ctx) {
+    const noise = new Noise(hash(ctx.seed, ctx.stem));
+    const bp = Biquad.bandpass(ctx.sr, 2400, 12);
+    const env = Env.exp(0.012);
+    const ping = normalize(render({ ...ctx, frames: Math.round(0.08 * ctx.sr) }, (t) => bp.process(noise.white()) * env(t)), 0.7);
+    const starts = [];
+    for (let at = 0; at < ctx.duration; at += PING_EVERY) starts.push(Math.round(at * ctx.sr));
+    return (offset, frames) => {
+      const out = new Float32Array(frames);
+      for (const start of starts) {
+        const from = Math.max(start, offset);
+        const to = Math.min(start + ping.length, offset + frames);
+        for (let i = from; i < to; i++) out[i - offset] += ping[i - start];
+      }
+      return out;
+    };
+  },
+
+  swell(ctx) {
+    const pad = Osc.tri(ctx.sr);
+    const level = Env.points([[0, 0], [1.5, 0.25], [3, 0]]);
+    return render(ctx, (t) => pad.next(110) * level(t));
+  },
+};
+
+export default function (ctx) {
+  const lp = [Biquad.lowpass(ctx.sr, 6000, 0.8), Biquad.lowpass(ctx.sr, 6000, 0.8)];
+  return (offset, frames, { drone, hits, swell }) => {
+    const left = filter(mix(drone[0], gain(hits[0], 0.8), gain(swell[0], 0.6)), lp[0]);
+    const right = filter(mix(drone[1], gain(hits[1], 0.7), gain(swell[1], 0.6)), lp[1]);
+    return [left.map(softclip), right.map(softclip)];
+  };
+}

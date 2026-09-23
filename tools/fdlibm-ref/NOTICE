@@ -1,0 +1,8 @@
+ieee754.cc is V8's src/base/ieee754.cc as shipped in Node.js v22.23.1 (V8 12.4.254), unmodified.
+It is fdlibm (Copyright (C) 1993 by Sun Microsystems, Inc.; "Permission to use, copy, modify, and
+distribute this software is freely granted, provided that this notice is preserved") as modified
+by Google (Copyright 2016 the V8 project authors, BSD-3-Clause; see V8's LICENSE).
+
+It is here as the REFERENCE for prelude/math.js: the port is checked against this file compiled
+with floating-point contraction off, bit for bit, over the sweep in sweep.h. It is not built into
+syrinx and not shipped.

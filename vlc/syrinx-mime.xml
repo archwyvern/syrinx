@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- shared-mime-info definition for syrinx sound sources, so desktops know what a .syr is. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="audio/x-syrinx">
+    <comment>syrinx sound source</comment>
+    <sub-class-of type="text/javascript"/>
+    <generic-icon name="audio-x-generic"/>
+    <glob pattern="*.syr"/>
+  </mime-type>
+</mime-info>

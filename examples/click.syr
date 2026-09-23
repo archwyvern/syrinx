@@ -1,0 +1,25 @@
+// A UI click, in the two parts every short sound has: the tick that makes it read as an event,
+// and the pitched body underneath it. `syrinx compile click.syr --stem tick` plays the part that
+// is almost always what is wrong when a click sounds weak.
+import { Osc, Env, render, normalize } from "syrinx";
+import { crack } from "./lib/space.js";
+
+export const meta = { name: "click", duration: 0.06, channels: 1, seed: 3 };
+
+export const stems = {
+  tick(ctx) {
+    const tick = crack(ctx, { seed: ctx.seed });
+    return render(ctx, (t) => tick(t));
+  },
+  body(ctx) {
+    const body = Osc.sine(ctx.sr);
+    const tone = Env.ad(0.0005, 0.012);
+    return render(ctx, (t) => body.next(1400) * tone(t) * 0.5);
+  },
+};
+
+// Normalising belongs to the finished sound, not to either layer: it is a function of the sum.
+export default function (ctx) {
+  const { tick, body } = ctx.stems;
+  return normalize(render(ctx, (t, i) => tick[0][i] + body[0][i]));
+}

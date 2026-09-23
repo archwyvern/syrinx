@@ -1,0 +1,15 @@
+[package]
+name = "syrinx-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "C ABI for syrinx-core (libsyrinx)."
+
+[lib]
+name = "syrinx"
+crate-type = ["cdylib"]
+
+[dependencies]
+syrinx-core = { path = "../syrinx-core" }

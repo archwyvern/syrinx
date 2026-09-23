@@ -1,0 +1,32 @@
+[package]
+name = "syrinx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "syrinx command line: compile and play sound sources."
+
+[[bin]]
+name = "syrinx"
+path = "src/main.rs"
+
+[dependencies]
+syrinx-core = { path = "../syrinx-core" }
+syrinx-encode = { path = "../syrinx-encode" }
+clap.workspace = true
+anyhow.workspace = true
+hound.workspace = true
+rayon = "1.12"
+walkdir = "2.5"
+blake3 = "1.8"
+png = "0.18"
+serde_json = "1"
+
+# Not under [target.'cfg(windows)'], which selects on the HOST: cross-compiling a Windows
+# binary from Linux needs this on the Linux side. The crate skips it for other targets.
+[build-dependencies]
+syrinx-exe-resources = { path = "../syrinx-exe-resources" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Media_Audio", "Win32_Foundation"] }

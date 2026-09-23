@@ -1,0 +1,44 @@
+{
+  "name": "syrinx",
+  "version": "0.2.0",
+  "description": "Sound sources as JavaScript, compiled to PCM. This package is the JS host; the Rust library and CLI in the same repository are the reference implementation.",
+  "license": "MIT",
+  "author": "Dominic Grostate",
+  "homepage": "https://github.com/archwyvern/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/archwyvern/syrinx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/archwyvern/syrinx/issues"
+  },
+  "keywords": [
+    "audio",
+    "synthesis",
+    "sound-design",
+    "procedural-audio",
+    "deterministic",
+    "v8",
+    "compiler"
+  ],
+  "type": "module",
+  "main": "js/index.js",
+  "types": "js/index.d.ts",
+  "exports": {
+    ".": "./js/index.js",
+    "./prelude": "./prelude/prelude.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "js",
+    "prelude",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

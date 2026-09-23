@@ -1,0 +1,20 @@
+[package]
+name = "syrinx-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "A compiler for sounds: JavaScript in, PCM out. Deterministic, V8-hosted."
+
+[lib]
+name = "syrinx_core"
+
+[dev-dependencies]
+serde_json = "1"
+
+[dependencies]
+v8.workspace = true
+hound.workspace = true
+thiserror.workspace = true
+serde = { version = "1", features = ["derive"] }

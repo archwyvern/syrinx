@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/syrinx-core",
+    "crates/syrinx-ffi",
+    "crates/syrinx-cli",
+    "crates/syrinx-encode",
+    "crates/syrinx-exe-resources",
+    "crates/syrinx-player",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/archwyvern/syrinx"
+publish = false
+
+[workspace.dependencies]
+v8 = "152.2"
+hound = "3.5"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+# The embedded V8 carries symbols nothing here needs; stripping takes ~17 MB off both binaries.
+strip = true

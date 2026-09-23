@@ -1,0 +1,15 @@
+/target/
+/dist/
+/examples/out/
+/vlc/build/
+/gst/build/
+/docs/superpowers/
+*.wav
+*.f32
+/.idea/
+/tools/fdlibm-ref/build/
+
+# Agent instructions and workflow notes stay local
+CLAUDE.md
+AGENTS.md
+.claude/
