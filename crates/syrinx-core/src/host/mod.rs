@@ -143,7 +143,10 @@ fn inspect_with(source: &str, name: &str, opts: &RenderOptions, deadline: Deadli
         with_source(source, name, opts, deadline.remaining(), |scope, _name, meta, dependencies, namespace, _guard| {
             let stems = read_stems(scope, namespace)?.into_iter().map(|(n, _)| n).collect();
             let has_mix = get(scope, namespace, "default").is_some();
-            Ok(Inspected { meta, stems, has_mix, dependencies })
+            // Here rather than at render: a source whose duration rounds to no frames at all is
+            // as broken when it is only checked as when it is compiled.
+            let (sample_rate, frames) = geometry(&meta, opts)?;
+            Ok(Inspected { meta, sample_rate, frames, stems, has_mix, dependencies })
         })
     })
 }
@@ -300,7 +303,7 @@ fn with_source<T>(
     let (namespace, dependencies) = load_entry(scope, source, name, &entry_path)?;
 
     let meta_value = get(scope, namespace, "meta");
-    let meta = read_meta(scope, meta_value, name)?;
+    let meta = read_meta(scope, meta_value)?;
 
     body(scope, name, meta, dependencies, namespace, &guard)
 }
@@ -339,7 +342,7 @@ fn load_entry<'s>(
     }
 
     let namespace = v8::Local::<v8::Object>::try_from(module.get_module_namespace())
-        .map_err(|_| Error::contract("internal: module namespace is not an object"))?;
+        .map_err(|_| Error::internal("module namespace is not an object"))?;
     let dependencies = with_loader(|l| std::mem::take(&mut l.dependencies));
     Ok((namespace, dependencies))
 }
@@ -425,27 +428,32 @@ fn error_from_exception(scope: &mut v8::PinScope<'_, '_>, exception: v8::Local<v
     Error { kind, message, file, line, column, diagnostics: Vec::new() }
 }
 
-fn read_meta(scope: &mut v8::PinScope<'_, '_>, value: Option<v8::Local<v8::Value>>, name: &str) -> Result<Meta, Error> {
+/// The source's `meta`, checked field by field in the order SPEC.md's table gives, with the
+/// messages every host reports (js/contract.js is held to these by test/contract.test.js).
+fn read_meta(scope: &mut v8::PinScope<'_, '_>, value: Option<v8::Local<v8::Value>>) -> Result<Meta, Error> {
     let Some(value) = value else {
         return Err(Error::contract("source has no `export const meta = { ... }`"));
     };
     let obj = v8::Local::<v8::Object>::try_from(value).map_err(|_| Error::contract("`meta` is not an object"))?;
 
-    if let Some(v) = get(scope, obj, "api") {
-        let api = if v.is_number() { v.number_value(scope).unwrap() } else { -1.0 };
-        // 3 is additive over 2, so both are accepted; 1 (a default export and no layers) is not.
-        if !(API_FLOOR as f64..=PRELUDE_VERSION as f64).contains(&api) || api.fract() != 0.0 {
-            return Err(Error::contract(format!(
-                "source declares meta.api {} but this compiler provides api {PRELUDE_VERSION} and accepts {API_FLOOR} to {PRELUDE_VERSION}",
-                v.to_rust_string_lossy(scope)
-            )));
-        }
+    // Required: a source says which contract it was written against, so no later host can read
+    // it as something else.
+    let Some(v) = get(scope, obj, "api") else {
+        return Err(Error::contract(format!(
+            "meta.api is required: this compiler provides api {PRELUDE_VERSION} and accepts {API_FLOOR} to {PRELUDE_VERSION}"
+        )));
+    };
+    let api = if v.is_number() { v.number_value(scope).unwrap() } else { -1.0 };
+    if !(API_FLOOR as f64..=PRELUDE_VERSION as f64).contains(&api) || api.fract() != 0.0 {
+        return Err(Error::contract(format!(
+            "source declares meta.api {} but this compiler provides api {PRELUDE_VERSION} and accepts {API_FLOOR} to {PRELUDE_VERSION}",
+            v.to_rust_string_lossy(scope)
+        )));
     }
-    let default_name = Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| name.to_string());
     let name = match get(scope, obj, "name") {
-        Some(v) if v.is_string() => v.to_rust_string_lossy(scope),
+        Some(v) if v.is_string() => Some(v.to_rust_string_lossy(scope)),
         Some(_) => return Err(Error::contract("meta.name must be a string")),
-        None => default_name,
+        None => None,
     };
     let duration = match get(scope, obj, "duration") {
         Some(v) if v.is_number() => v.number_value(scope).unwrap(),
@@ -474,8 +482,16 @@ fn read_meta(scope: &mut v8::PinScope<'_, '_>, value: Option<v8::Local<v8::Value
         Some(_) => return Err(Error::contract("meta.sampleRate must be a number")),
         None => None,
     };
+    // An unsigned 32-bit integer, as written. Converting anything else would be a rule every host
+    // had to reproduce exactly, for a seed nobody meant.
     let seed = match get(scope, obj, "seed") {
-        Some(v) if v.is_number() => v.number_value(scope).unwrap() as u32,
+        Some(v) if v.is_number() => {
+            let s = v.number_value(scope).unwrap();
+            if !(0.0..=u32::MAX as f64).contains(&s) || s.fract() != 0.0 {
+                return Err(Error::contract("meta.seed must be an integer in [0, 4294967295]"));
+            }
+            s as u32
+        }
         Some(_) => return Err(Error::contract("meta.seed must be a number")),
         None => 0,
     };

@@ -91,13 +91,13 @@ impl Stream {
             match stem.next_block()? {
                 Some(block) if block.offset == offset && block.frames == n => blocks.push(block.samples),
                 Some(block) => {
-                    return Err(Error::contract(format!(
-                        "internal: layer \"{}\" produced the block at frame {} when frame {offset} was due",
+                    return Err(Error::internal(format!(
+                        "layer \"{}\" produced the block at frame {} when frame {offset} was due",
                         stem.name(),
                         block.offset
                     )))
                 }
-                None => return Err(Error::contract(format!("internal: layer \"{}\" ended at frame {offset}", stem.name()))),
+                None => return Err(Error::internal(format!("layer \"{}\" ended at frame {offset}", stem.name()))),
             }
         }
         let block = match self.mixer.as_mut() {

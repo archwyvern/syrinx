@@ -92,7 +92,7 @@ const char *syrinx_render_error_file(const SyrinxRender *r); /* module the posit
 int32_t syrinx_render_error_line(const SyrinxRender *r);     /* 1-based; 0 = unknown */
 int32_t syrinx_render_error_column(const SyrinxRender *r);   /* 1-based; 0 = unknown */
 
-const char *syrinx_render_name(const SyrinxRender *r);       /* owned by r */
+const char *syrinx_render_name(const SyrinxRender *r);       /* owned by r; NULL when the source declares no name */
 double syrinx_render_duration(const SyrinxRender *r);        /* seconds, as declared */
 uint32_t syrinx_render_seed(const SyrinxRender *r);
 bool syrinx_render_loop(const SyrinxRender *r);

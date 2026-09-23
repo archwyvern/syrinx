@@ -178,7 +178,10 @@ impl PlayerApp {
                         if let Some(row) = self.playlist.rows.iter_mut().find(|r| r.path == found.path) {
                             match found.result {
                                 Ok((name, duration, stems)) => {
-                                    row.name = name;
+                                    // A source that declares no name keeps its file's stem.
+                                    if let Some(name) = name {
+                                        row.name = name;
+                                    }
                                     row.duration = Some(duration);
                                     row.stems = stems;
                                     row.error = None;

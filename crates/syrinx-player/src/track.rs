@@ -134,9 +134,13 @@ impl Track {
         };
 
         let frames_per_column = frames.div_ceil(OVERVIEW_COLUMNS).max(1);
+        // The contract gives a name no default; the player shows the file's stem instead.
+        let name = source.meta().name.clone().unwrap_or_else(|| {
+            path.file_stem().map_or_else(|| "sound".to_string(), |s| s.to_string_lossy().into_owned())
+        });
         let track = Arc::new(Track {
             path: path.clone(),
-            name: source.meta().name.clone(),
+            name: name.clone(),
             dir: dir.clone(),
             sample_rate,
             channels,
@@ -153,7 +157,7 @@ impl Track {
         });
 
         let meta = Meta {
-            name: source.meta().name.clone(),
+            name,
             sample_rate,
             channels,
             frames,
@@ -400,10 +404,11 @@ impl Drop for Track {
 pub fn describe_error(path: &Path, e: &syrinx_core::Error) -> String {
     let kind = match e.kind {
         ErrorKind::Check => "determinism check failed",
-        ErrorKind::Compile => "syntax error",
+        ErrorKind::Compile => "compile error",
         ErrorKind::Runtime => "runtime error",
         ErrorKind::Timeout => "timed out",
         ErrorKind::Contract => "contract error",
+        ErrorKind::Internal => "internal error",
     };
     let file = e.file.clone().unwrap_or_else(|| path.display().to_string());
     if e.diagnostics.len() > 1 {

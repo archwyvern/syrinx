@@ -64,7 +64,9 @@ pub fn v8_version() -> &'static str {
 /// What a source declares about itself in `meta`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Meta {
-    pub name: String,
+    /// The declared name. There is no default: a tool that needs a label picks one itself (the
+    /// CLI and the player use the file name).
+    pub name: Option<String>,
     /// Seconds.
     pub duration: f64,
     /// 1 or 2.
@@ -154,7 +156,8 @@ impl Rendered {
 pub enum ErrorKind {
     /// The static determinism check rejected the source.
     Check,
-    /// V8 refused to compile the source (syntax error).
+    /// The module graph could not be built: V8 refused a module (a syntax error, an import
+    /// naming an export its module lacks) or an import could not be resolved.
     Compile,
     /// The source threw while running.
     Runtime,
@@ -162,6 +165,8 @@ pub enum ErrorKind {
     Timeout,
     /// The source ran fine but did not honour the contract (bad `meta`, bad return value).
     Contract,
+    /// A failure inside the host: a bug to report, not the source's fault.
+    Internal,
 }
 
 #[derive(Debug, Clone)]
@@ -179,12 +184,24 @@ pub struct Error {
 }
 
 impl Error {
+    fn of(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self { kind, message: message.into(), file: None, line: None, column: None, diagnostics: Vec::new() }
+    }
+
     fn contract(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Contract, message: message.into(), file: None, line: None, column: None, diagnostics: Vec::new() }
+        Self::of(ErrorKind::Contract, message)
+    }
+
+    fn compile(message: impl Into<String>) -> Self {
+        Self::of(ErrorKind::Compile, message)
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::of(ErrorKind::Internal, message)
     }
 
     fn timeout() -> Self {
-        Self { kind: ErrorKind::Timeout, message: "source exceeded its time budget".into(), file: None, line: None, column: None, diagnostics: Vec::new() }
+        Self::of(ErrorKind::Timeout, "source exceeded its time budget")
     }
 
     fn check(diagnostics: Vec<Diagnostic>) -> Self {
@@ -219,6 +236,10 @@ impl std::error::Error for Error {}
 #[derive(Debug, Clone, PartialEq)]
 pub struct Inspected {
     pub meta: Meta,
+    /// The rate it renders at: the options' override, else its own, else 48 000.
+    pub sample_rate: u32,
+    /// `round(duration * sample_rate)`, never zero.
+    pub frames: usize,
     /// The stems it declares, in declaration order.
     pub stems: Vec<String>,
     /// Whether it has a default export combining them. Without one the mix is their sum.

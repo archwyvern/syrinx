@@ -155,7 +155,7 @@ impl Stem {
                         return Err(e);
                     }
                     Ok(_) | Err(_) => {
-                        let e = Error::contract(format!("internal: layer \"{}\" ended without finishing", self.name));
+                        let e = Error::internal(format!("layer \"{}\" ended without finishing", self.name));
                         self.error = Some(e.clone());
                         return Err(e);
                     }

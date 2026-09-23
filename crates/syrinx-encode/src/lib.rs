@@ -232,10 +232,11 @@ fn vorbis(r: &Rendered, opts: &Options) -> Result<Vec<u8>, Error> {
     let channels = NonZeroU8::new(r.channels as u8).ok_or_else(|| Error::Encoder("vorbis: zero channels".into()))?;
     let bitrate = NonZeroU32::new(opts.bitrate_kbps.max(32) * 1000).unwrap();
     let mut builder = VorbisEncoderBuilder::new(rate, channels, Vec::<u8>::new()).map_err(err)?;
-    builder
-        .bitrate_management_strategy(VorbisBitrateManagementStrategy::Vbr { target_bitrate: bitrate })
-        .comment_tag("TITLE", r.meta.name.as_str())
-        .map_err(err)?;
+    builder.bitrate_management_strategy(VorbisBitrateManagementStrategy::Vbr { target_bitrate: bitrate });
+    // A title only when the source declares a name: the tag carries what the sound says it is.
+    if let Some(name) = &r.meta.name {
+        builder.comment_tag("TITLE", name.as_str()).map_err(err)?;
+    }
     let mut encoder = builder.build().map_err(err)?;
     let p = planes(r);
     let block: Vec<&[f32]> = p.iter().map(|v| v.as_slice()).collect();
@@ -277,10 +278,13 @@ fn opus(r: &Rendered, opts: &Options) -> Result<Vec<u8>, Error> {
     tags.extend_from_slice(b"OpusTags");
     tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
     tags.extend_from_slice(vendor);
-    let title = format!("TITLE={}", r.meta.name);
-    tags.extend_from_slice(&1u32.to_le_bytes());
-    tags.extend_from_slice(&(title.len() as u32).to_le_bytes());
-    tags.extend_from_slice(title.as_bytes());
+    // A title only when the source declares a name, as for vorbis.
+    let comments: Vec<String> = r.meta.name.iter().map(|name| format!("TITLE={name}")).collect();
+    tags.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+    for comment in &comments {
+        tags.extend_from_slice(&(comment.len() as u32).to_le_bytes());
+        tags.extend_from_slice(comment.as_bytes());
+    }
 
     let serial = 0x5359_5258; // "SYRX"
     let mut writer = PacketWriter::new(Vec::<u8>::new());
@@ -367,7 +371,7 @@ mod tests {
             }
         }
         Rendered {
-            meta: Meta { name: "tone".into(), duration: 0.5, channels, sample_rate: None, seed: 0, looping: false },
+            meta: Meta { name: Some("tone".into()), duration: 0.5, channels, sample_rate: None, seed: 0, looping: false },
             sample_rate: rate,
             channels,
             frames,

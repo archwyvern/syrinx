@@ -272,7 +272,7 @@ fn run() -> Result<()> {
                         .map_err(|e| anyhow!("{e}"))
                         .with_context(|| format!("writing {}", out.display()))?;
                     if !quiet {
-                        report(&rendered, Some(took), out, Some(&syrinx_encode::describe(codec, &encode)));
+                        report(src, &rendered, Some(took), out, Some(&syrinx_encode::describe(codec, &encode)));
                     }
                     Ok(())
                 })();
@@ -374,8 +374,8 @@ fn run() -> Result<()> {
                 return (0..repeat.max(1)).try_for_each(|_| stream_to_player(&input, &render.options()));
             }
             let (rendered, took) = compile(&input, &render.options())?;
-            report(&rendered, Some(took), Path::new("(player)"), None);
-            let tmp = std::env::temp_dir().join(format!("syrinx-{}-{}.wav", std::process::id(), rendered.meta.name));
+            report(&input, &rendered, Some(took), Path::new("(player)"), None);
+            let tmp = std::env::temp_dir().join(format!("syrinx-{}-{}.wav", std::process::id(), display_name(&rendered.meta, &input)));
             syrinx_core::wav::write(&tmp, &rendered, Format::Wav16).context("writing temp wav")?;
             let result = (0..repeat.max(1)).try_for_each(|_| play(&tmp, player.as_deref()));
             let _ = std::fs::remove_file(&tmp);
@@ -393,12 +393,13 @@ fn run() -> Result<()> {
                     Ok(info) => {
                         let m = &info.meta;
                         println!(
-                            "{}: ok  name={} duration={}s channels={} sampleRate={} seed={} loop={} stems={} mix={}",
+                            "{}: ok  name={} duration={}s rate={} frames={} channels={} seed={} loop={} stems={} mix={}",
                             input.display(),
-                            m.name,
+                            m.name.as_deref().unwrap_or("-"),
                             m.duration,
+                            info.sample_rate,
+                            info.frames,
                             m.channels,
-                            m.sample_rate.map_or("default".to_string(), |r| r.to_string()),
                             m.seed,
                             m.looping,
                             info.stems.len(),
@@ -721,7 +722,7 @@ fn bounce_stems(inputs: &[PathBuf], dir: &Path, opts: &RenderOptions, quiet: boo
         let out = dir.join(format!("{stem}.wav"));
         syrinx_core::wav::write(&out, r, Format::WavFloat).with_context(|| format!("writing {}", out.display()))?;
         if !quiet {
-            report(r, None, &out, Some("32-bit float wav"));
+            report(&input, r, None, &out, Some("32-bit float wav"));
         }
     }
 
@@ -802,7 +803,7 @@ fn mix_from_bounce(
         .map_err(|e| anyhow!("{e}"))
         .with_context(|| format!("writing {}", out.display()))?;
     if !quiet {
-        report(&mixed, Some(started.elapsed()), out, Some(&syrinx_encode::describe(codec, encode)));
+        report(input, &mixed, Some(started.elapsed()), out, Some(&syrinx_encode::describe(codec, encode)));
     }
     Ok(())
 }
@@ -840,10 +841,11 @@ fn hashes_of(input: &Path, opts: &RenderOptions) -> Result<Vec<(Option<String>, 
 fn describe(input: &Path, e: &Error) -> String {
     let kind = match e.kind {
         ErrorKind::Check => "determinism check failed",
-        ErrorKind::Compile => "syntax error",
+        ErrorKind::Compile => "compile error",
         ErrorKind::Runtime => "runtime error",
         ErrorKind::Timeout => "timed out",
         ErrorKind::Contract => "contract error",
+        ErrorKind::Internal => "internal error",
     };
     let file = e.file.clone().unwrap_or_else(|| input.display().to_string());
     if e.diagnostics.len() > 1 {
@@ -865,15 +867,24 @@ fn dbfs(x: f32) -> String {
     if x <= 0.0 { "-inf dBFS".into() } else { format!("{:.1} dBFS", 20.0 * x.log10()) }
 }
 
-fn report(r: &Rendered, took: Option<Duration>, output: &Path, encoded_as: Option<&str>) {
+/// What to call a sound in output: its declared name, else its file's stem. The contract gives a
+/// name no default (SPEC.md, clause 3); choosing a label is this tool's business.
+fn display_name(meta: &syrinx_core::Meta, source: &Path) -> String {
+    meta.name.clone().unwrap_or_else(|| {
+        source.file_stem().map_or_else(|| "sound".to_string(), |s| s.to_string_lossy().into_owned())
+    })
+}
+
+fn report(source: &Path, r: &Rendered, took: Option<Duration>, output: &Path, encoded_as: Option<&str>) {
     let peak = r.peak();
     let clip = if peak > 1.0 { "  CLIPPING" } else { "" };
     let encoded_as = encoded_as.map_or(String::new(), |e| format!(" ({e})"));
     // A layer is named for the sound it belongs to and the layer it is, so a bounce directory's
     // worth of lines cannot be mistaken for several sounds.
+    let name = display_name(&r.meta, source);
     let label = match &r.stem {
-        Some(stem) => format!("{}#{stem}", r.meta.name),
-        None => r.meta.name.clone(),
+        Some(stem) => format!("{name}#{stem}"),
+        None => name,
     };
     let timing = match took {
         Some(t) => format!("  rendered in {:.0} ms", t.as_secs_f64() * 1000.0),
@@ -906,7 +917,7 @@ fn stream_to_player(input: &Path, opts: &RenderOptions) -> Result<()> {
     let (rate, channels, frames) = (stream.source().sample_rate(), stream.source().channels(), stream.source().frames());
     eprintln!(
         "{}  {:.3}s  {} Hz  {}ch  {} in {:.0} ms  -> (player)",
-        stream.source().meta().name,
+        display_name(stream.source().meta(), input),
         frames as f64 / rate as f64,
         rate,
         channels,

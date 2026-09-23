@@ -32,7 +32,7 @@ pub(super) fn read_stems<'s>(
     let obj = v8::Local::<v8::Object>::try_from(value).map_err(|_| Error::contract("`stems` must be an object of functions"))?;
     let keys = obj
         .get_own_property_names(scope, v8::GetPropertyNamesArgsBuilder::new().build())
-        .ok_or_else(|| Error::contract("internal: cannot enumerate `stems`"))?;
+        .ok_or_else(|| Error::internal("cannot enumerate `stems`"))?;
     let mut out = Vec::with_capacity(keys.length() as usize);
     for i in 0..keys.length() {
         let Some(key) = keys.get_index(scope, i) else { continue };
@@ -56,7 +56,7 @@ pub(super) fn read_stems<'s>(
 /// The `{ BLOCK_FRAMES, stem, mix }` object from `run.js`, evaluated once per isolate.
 pub(super) fn run_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> Result<v8::Local<'s, v8::Object>, Error> {
     let value = run_script(scope, RUN, RUN_ORIGIN)?;
-    v8::Local::<v8::Object>::try_from(value).map_err(|_| Error::contract("internal: the run wrapper is not an object"))
+    v8::Local::<v8::Object>::try_from(value).map_err(|_| Error::internal("the run wrapper is not an object"))
 }
 
 pub(super) fn run_entry<'s>(
@@ -64,8 +64,8 @@ pub(super) fn run_entry<'s>(
     run: v8::Local<v8::Object>,
     entry: &str,
 ) -> Result<v8::Local<'s, v8::Function>, Error> {
-    let value = get(scope, run, entry).ok_or_else(|| Error::contract(format!("internal: the run wrapper has no `{entry}`")))?;
-    v8::Local::<v8::Function>::try_from(value).map_err(|_| Error::contract(format!("internal: run.{entry} is not a function")))
+    let value = get(scope, run, entry).ok_or_else(|| Error::internal(format!("the run wrapper has no `{entry}`")))?;
+    v8::Local::<v8::Function>::try_from(value).map_err(|_| Error::internal(format!("run.{entry} is not a function")))
 }
 
 /// A Float32Array over a copy of `data`.
@@ -76,7 +76,7 @@ pub(super) fn f32_array<'s>(scope: &mut v8::PinScope<'s, '_>, data: &[f32]) -> R
     }
     let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
     let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
-    v8::Float32Array::new(scope, buffer, 0, data.len()).ok_or_else(|| Error::contract("internal: cannot build a Float32Array"))
+    v8::Float32Array::new(scope, buffer, 0, data.len()).ok_or_else(|| Error::internal("cannot build a Float32Array"))
 }
 
 /// An array of `channels` Float32Arrays per layer, from planes: what the run wrapper's mix
@@ -121,22 +121,22 @@ pub(super) fn planes_from<'s>(
     channels: u32,
 ) -> Result<Vec<Vec<f32>>, Error> {
     let array =
-        v8::Local::<v8::Array>::try_from(value).map_err(|_| Error::contract("internal: the run wrapper did not return planes"))?;
+        v8::Local::<v8::Array>::try_from(value).map_err(|_| Error::internal("the run wrapper did not return planes"))?;
     if array.length() != channels {
-        return Err(Error::contract(format!(
-            "internal: the run wrapper returned {} plane(s), expected {channels}",
+        return Err(Error::internal(format!(
+            "the run wrapper returned {} plane(s), expected {channels}",
             array.length()
         )));
     }
     let mut planes = Vec::with_capacity(channels as usize);
     for c in 0..channels {
-        let plane = array.get_index(scope, c).ok_or_else(|| Error::contract("internal: a plane is missing"))?;
+        let plane = array.get_index(scope, c).ok_or_else(|| Error::internal("a plane is missing"))?;
         let view = v8::Local::<v8::ArrayBufferView>::try_from(plane)
-            .map_err(|_| Error::contract("internal: a plane is not a typed array"))?;
+            .map_err(|_| Error::internal("a plane is not a typed array"))?;
         let mut bytes = vec![0u8; frames * 4];
         let copied = view.copy_contents(&mut bytes);
         if copied != bytes.len() {
-            return Err(Error::contract(format!("internal: expected {} bytes in a plane, got {copied}", bytes.len())));
+            return Err(Error::internal(format!("expected {} bytes in a plane, got {copied}", bytes.len())));
         }
         planes.push(bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect());
     }
@@ -238,7 +238,7 @@ pub(super) fn stem_setup<'s>(
     };
     let run = run_object(scope)?;
     let entry = run_entry(scope, run, "stem")?;
-    let stem_name = v8::String::new(scope, stem).ok_or_else(|| Error::contract("internal: stem name too large"))?;
+    let stem_name = v8::String::new(scope, stem).ok_or_else(|| Error::internal("stem name too large"))?;
     let args: [v8::Local<v8::Value>; 7] = [
         f.into(),
         v8::Number::new(scope, sample_rate as f64).into(),

@@ -13,7 +13,7 @@ use crate::{Error, Inspected, Meta, RenderOptions, Target};
 use super::mixer::{mixer_thread, MixCommand, MixForm, MixSetup, Mixer};
 use super::stem::{stem_thread, LiveStem, Stem, StemHandle, StemMessage};
 use super::whole::parallelism;
-use super::{geometry, inspect_with, spawn_v8_thread, Deadline, PREFETCH_BLOCKS};
+use super::{inspect_with, spawn_v8_thread, Deadline, PREFETCH_BLOCKS};
 
 /// Bounds how many isolates are being set up at once, per call. A layer that streams releases
 /// its slot once live, so a source with more streaming layers than cores cannot deadlock.
@@ -66,7 +66,7 @@ impl Source {
 
     pub(super) fn open_with(source: &str, name: &str, opts: &RenderOptions, deadline: Deadline) -> Result<Source, Error> {
         let info = inspect_with(source, name, opts, deadline)?;
-        let (sample_rate, frames) = geometry(&info.meta, opts)?;
+        let (sample_rate, frames) = (info.sample_rate, info.frames);
         Ok(Source { text: source.to_string(), name: name.to_string(), opts: opts.clone(), info, sample_rate, frames })
     }
 
@@ -168,13 +168,13 @@ impl Source {
                 }
                 Ok(_) => {
                     let _ = thread.join();
-                    failure.get_or_insert(Error::contract(format!("internal: layer \"{name}\" reported a block before its setup")));
+                    failure.get_or_insert(Error::internal(format!("layer \"{name}\" reported a block before its setup")));
                 }
                 // The thread saw another layer fail and never started, or died.
                 Err(_) => {
                     let _ = thread.join();
                     if failure.is_none() && !failed.load(Ordering::SeqCst) {
-                        failure = Some(Error::contract(format!("internal: layer \"{name}\" ended without a result")));
+                        failure = Some(Error::internal(format!("layer \"{name}\" ended without a result")));
                     }
                 }
             }
@@ -216,7 +216,7 @@ impl Source {
             }
             Err(_) => {
                 let _ = thread.join();
-                return Err(Error::contract("internal: the mix stage ended without a result"));
+                return Err(Error::internal("the mix stage ended without a result"));
             }
         };
         Ok(Mixer {

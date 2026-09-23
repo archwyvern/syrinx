@@ -93,33 +93,32 @@ pub(super) fn resolve_module<'s>(
         return None;
     };
 
+    // Every way an import can fail to resolve is a `compile` error naming the module that asked,
+    // with one message per way in every host (js/worker.js `resolveImport` gives the same).
+    let unresolved = |why: String| {
+        let mut e = Error::compile(format!("cannot import \"{spec}\": {why}"));
+        e.file = Some(referrer_path.to_string_lossy().into_owned());
+        e
+    };
     if !(spec.starts_with("./") || spec.starts_with("../")) {
-        let e = Error::contract(format!(
-            "cannot import \"{spec}\": only \"{PRELUDE_SPECIFIER}\" and relative paths (./x.js, ../lib/y.syr) can be imported"
-        ));
-        return fail(scope, e);
+        return fail(scope, unresolved(format!("only \"{PRELUDE_SPECIFIER}\" and relative paths can be imported")));
     }
 
     let base = referrer_path.parent().map(Path::to_path_buf).unwrap_or_default();
     let candidate = base.join(&spec);
     let resolved = match std::fs::canonicalize(&candidate) {
         Ok(p) => p,
-        Err(err) => {
-            let e = Error::contract(format!("cannot import \"{spec}\" from {}: {err}", referrer_path.display()));
-            return fail(scope, e);
+        Err(err) if matches!(err.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {
+            return fail(scope, unresolved("no such file".into()));
         }
+        Err(_) => return fail(scope, unresolved("it cannot be resolved".into())),
     };
     let jailed = with_loader(|l| l.root.clone());
     if let Some(root) = jailed
         && !resolved.starts_with(&root)
     {
-        let e = Error::contract(format!(
-            "cannot import \"{spec}\" from {}: {} is outside the project root {}",
-            referrer_path.display(),
-            resolved.display(),
-            root.display()
-        ));
-        return fail(scope, e);
+        let why = format!("{} is outside the project root {}", resolved.display(), root.display());
+        return fail(scope, unresolved(why));
     }
 
     if let Some(existing) = with_loader(|l| l.modules.get(&resolved).cloned()) {
@@ -128,10 +127,7 @@ pub(super) fn resolve_module<'s>(
 
     let code = match std::fs::read_to_string(&resolved) {
         Ok(c) => c,
-        Err(err) => {
-            let e = Error::contract(format!("cannot read {}: {err}", resolved.display()));
-            return fail(scope, e);
-        }
+        Err(_) => return fail(scope, unresolved(format!("{} cannot be read", resolved.display()))),
     };
     let diagnostics = crate::check::check(&code);
     if !diagnostics.is_empty() {

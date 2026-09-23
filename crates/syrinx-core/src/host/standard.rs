@@ -18,7 +18,7 @@ pub fn prelude_exports() -> Result<Vec<String>, Error> {
         with_prelude(|scope, namespace| {
             let names = namespace
                 .get_own_property_names(scope, v8::GetPropertyNamesArgsBuilder::new().build())
-                .ok_or_else(|| Error::contract("internal: cannot enumerate the prelude's exports"))?;
+                .ok_or_else(|| Error::internal("cannot enumerate the prelude's exports"))?;
             let mut out = Vec::new();
             for i in 0..names.length() {
                 if let Some(key) = names.get_index(scope, i).filter(|k| k.is_string()) {
@@ -85,7 +85,7 @@ fn with_prelude<T>(
             return Err(caught_in(tc, ErrorKind::Runtime));
         }
         v8::Local::<v8::Object>::try_from(module.get_module_namespace())
-            .map_err(|_| Error::contract("internal: prelude namespace is not an object"))?
+            .map_err(|_| Error::internal("prelude namespace is not an object"))?
     };
     body(scope, namespace)
 }

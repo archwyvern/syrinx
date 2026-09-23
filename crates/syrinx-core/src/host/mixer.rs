@@ -79,7 +79,7 @@ fn call_mix<'s>(
     let MixEntry { entry, default } = *mix;
     let name_array = v8::Array::new(scope, names.len() as i32);
     for (i, stem) in names.iter().enumerate() {
-        let value = v8::String::new(scope, stem).ok_or_else(|| Error::contract("internal: stem name too large"))?;
+        let value = v8::String::new(scope, stem).ok_or_else(|| Error::internal("stem name too large"))?;
         name_array.set_index(scope, i as u32, value.into());
     }
     let buffers_value: v8::Local<v8::Value> = match buffers {
@@ -370,7 +370,7 @@ impl Mixer {
         self.commands
             .as_ref()
             .and_then(|c| c.send(command).ok())
-            .ok_or_else(|| Error::contract("internal: the mix stage's thread is gone"))
+            .ok_or_else(|| Error::internal("the mix stage's thread is gone"))
     }
 
     /// A fresh processor instance in the same isolate, its first block at `offset`, which must
@@ -388,7 +388,7 @@ impl Mixer {
         }
         let (reply, answer) = mpsc::channel();
         self.send(MixCommand::Restart { from: offset, reply })?;
-        answer.recv().unwrap_or_else(|_| Err(Error::contract("internal: the mix stage's thread is gone")))
+        answer.recv().unwrap_or_else(|_| Err(Error::internal("the mix stage's thread is gone")))
     }
 
     /// One block: `stems` are interleaved, parallel to `stem_names()`, each the length of the
@@ -400,7 +400,7 @@ impl Mixer {
         }
         let (reply, answer) = mpsc::channel();
         self.send(MixCommand::Mix { offset, stems: stems.iter().map(|s| s.to_vec()).collect(), reply })?;
-        let planes = answer.recv().unwrap_or_else(|_| Err(Error::contract("internal: the mix stage's thread is gone")))?;
+        let planes = answer.recv().unwrap_or_else(|_| Err(Error::internal("the mix stage's thread is gone")))?;
         let frames = planes.first().map_or(0, Vec::len);
         Ok(Block { offset, frames, samples: interleave(&planes, frames, self.channels) })
     }
@@ -415,7 +415,7 @@ impl Mixer {
     pub(super) fn mix_all_with(&mut self, stems: &[&[f32]], budget: Duration) -> Result<Rendered, Error> {
         let (reply, answer) = mpsc::channel();
         self.send(MixCommand::MixAll { stems: stems.iter().map(|s| s.to_vec()).collect(), budget, reply })?;
-        answer.recv().unwrap_or_else(|_| Err(Error::contract("internal: the mix stage's thread is gone")))
+        answer.recv().unwrap_or_else(|_| Err(Error::internal("the mix stage's thread is gone")))
     }
 }
 

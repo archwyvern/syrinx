@@ -26,7 +26,8 @@ pub struct SyrinxRender {
     column: i32,
     dependencies: Vec<CString>,
     stems: Vec<CString>,
-    name: CString,
+    /// The declared name; None when the source declares none.
+    name: Option<CString>,
     duration: f64,
     seed: u32,
     looping: bool,
@@ -67,7 +68,7 @@ impl SyrinxRender {
             column: column.map_or(0, |c| c as i32),
             dependencies: Vec::new(),
             stems: Vec::new(),
-            name: CString::default(),
+            name: None,
             duration: 0.0,
             seed: 0,
             looping: false,
@@ -86,6 +87,7 @@ impl SyrinxRender {
             ErrorKind::Runtime => KIND_RUNTIME,
             ErrorKind::Timeout => KIND_TIMEOUT,
             ErrorKind::Contract => KIND_CONTRACT,
+            ErrorKind::Internal => KIND_INTERNAL,
         };
         let message = if e.diagnostics.len() > 1 {
             e.diagnostics
@@ -113,7 +115,7 @@ impl SyrinxRender {
             column: 0,
             dependencies: Vec::new(),
             stems: Vec::new(),
-            name: cstring(&meta.name),
+            name: meta.name.as_deref().map(cstring),
             duration: meta.duration,
             seed: meta.seed,
             looping: meta.looping,
@@ -439,7 +441,10 @@ accessor!(syrinx_render_error, *const c_char, std::ptr::null(), |r| if r.ok { st
 accessor!(syrinx_render_error_file, *const c_char, std::ptr::null(), |r| if r.ok || r.file.as_bytes().is_empty() { std::ptr::null() } else { r.file.as_ptr() });
 accessor!(syrinx_render_error_line, i32, 0, |r| r.line);
 accessor!(syrinx_render_error_column, i32, 0, |r| r.column);
-accessor!(syrinx_render_name, *const c_char, std::ptr::null(), |r| if r.ok { r.name.as_ptr() } else { std::ptr::null() });
+accessor!(syrinx_render_name, *const c_char, std::ptr::null(), |r| match (&r.name, r.ok) {
+    (Some(name), true) => name.as_ptr(),
+    _ => std::ptr::null(),
+});
 accessor!(syrinx_render_duration, f64, 0.0, |r| r.duration);
 accessor!(syrinx_render_seed, u32, 0, |r| r.seed);
 accessor!(syrinx_render_loop, bool, false, |r| r.looping);
@@ -492,8 +497,8 @@ mod tests {
     use super::*;
 
     const CLICK: &str = r#"
-import { Osc, Env, render, stream, normalize } from "syrinx";
-export const meta = { name: "click", duration: 0.06, channels: 1, seed: 3 };
+import { Osc, Env, render, stream } from "./framework/dsp.js";
+export const meta = { api: 4, name: "click", duration: 0.06, channels: 1, seed: 3 };
 export const stems = {
   tick(ctx) { const e = Env.exp(0.002); return stream(ctx, (t) => e(t) * 0.5); },
   body(ctx) { const body = Osc.sine(ctx.sr); const tone = Env.ad(0.0005, 0.012); return render(ctx, (t) => body.next(1400) * tone(t) * 0.5); },
@@ -505,9 +510,19 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
     }
 
+    /// click.syr in a project with the framework vendored beside it, as its path for the C ABI.
+    fn click(test: &str) -> CString {
+        let dir = std::env::temp_dir().join(format!("syrinx-ffi-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        syrinx_core::framework::vendor(&dir.join("framework"), "test").unwrap();
+        let path = dir.join("click.syr");
+        std::fs::write(&path, CLICK).unwrap();
+        CString::new(path.to_str().unwrap()).unwrap()
+    }
+
     #[test]
     fn a_stream_concatenates_to_the_render() {
-        let name = CString::new("click.syr").unwrap();
+        let name = click("stream");
         let rendered = unsafe { syrinx_render(CLICK.as_ptr(), CLICK.len(), name.as_ptr(), std::ptr::null(), 0, 0) };
         assert!(unsafe { syrinx_render_ok(rendered) });
         let frames = unsafe { syrinx_render_frames(rendered) } as usize;
@@ -546,7 +561,7 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
 
     #[test]
     fn a_subset_and_a_bad_source_report_through_info() {
-        let name = CString::new("click.syr").unwrap();
+        let name = click("subset");
         let subset = CString::new("body").unwrap();
         let stream = unsafe { syrinx_stream_open(CLICK.as_ptr(), CLICK.len(), name.as_ptr(), std::ptr::null(), 0, 0, subset.as_ptr()) };
         assert!(unsafe { syrinx_render_ok(syrinx_stream_info(stream)) });
@@ -557,7 +572,7 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         unsafe { syrinx_render_free(block) };
         unsafe { syrinx_stream_free(stream) };
 
-        let bad = "export const meta = { duration: 0.01 };\nexport const stems = { a: (ctx) => Math.random() };";
+        let bad = "export const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => Math.random() };";
         let stream = unsafe { syrinx_stream_open(bad.as_ptr(), bad.len(), name.as_ptr(), std::ptr::null(), 0, 0, std::ptr::null()) };
         let info = unsafe { syrinx_stream_info(stream) };
         assert!(!unsafe { syrinx_render_ok(info) });
@@ -566,5 +581,15 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         assert!(unsafe { syrinx_stream_next(stream) }.is_null());
         unsafe { syrinx_stream_free(stream) };
         unsafe { syrinx_stream_free(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn an_undeclared_name_is_null() {
+        let source = "export const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => new Float32Array(ctx.frames) };";
+        let name = CString::new("nameless.syr").unwrap();
+        let info = unsafe { syrinx_inspect(source.as_ptr(), source.len(), name.as_ptr(), std::ptr::null()) };
+        assert!(unsafe { syrinx_render_ok(info) });
+        assert!(unsafe { syrinx_render_name(info) }.is_null(), "no default name: absent is NULL");
+        unsafe { syrinx_render_free(info) };
     }
 }

@@ -12,7 +12,7 @@ use crate::track::{RENDER_TIMEOUT, describe_error};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub path: PathBuf,
-    /// The file's stem until inspected, then `meta.name`.
+    /// The file's stem, replaced by `meta.name` when inspection finds one.
     pub name: String,
     /// Seconds, once inspected.
     pub duration: Option<f64>,
@@ -122,7 +122,8 @@ pub fn is_source(path: &Path) -> bool {
 /// What inspecting a row found.
 pub struct Inspected {
     pub path: PathBuf,
-    pub result: Result<(String, f64, Vec<String>), String>,
+    /// The declared name (None when the source declares none), the duration and the layers.
+    pub result: Result<(Option<String>, f64, Vec<String>), String>,
 }
 
 /// Inspects each row on one background thread, in order; results arrive on the receiver and
