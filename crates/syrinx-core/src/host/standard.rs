@@ -1,5 +1,6 @@
 //! The standard on its own: a fresh isolate with the math and the prelude evaluated, for the
-//! checks that read what the prelude exports and what block size each file declares.
+//! checks that read what the prelude (or a framework module) exports and what block size each file
+//! declares.
 
 use std::collections::HashMap;
 
@@ -14,11 +15,18 @@ use super::{caught_in, get, init_v8, install_standard_math, on_own_thread, PRELU
 /// Used to verify the type declarations against the real module: the documentation is only
 /// trustworthy if the two cannot drift apart.
 pub fn prelude_exports() -> Result<Vec<String>, Error> {
+    module_exports(PRELUDE_SPECIFIER, PRELUDE)
+}
+
+/// The names a module exports at run time, evaluated in a fresh isolate after the standard math
+/// with the prelude behind `"syrinx"` -- how a framework module's declarations are checked. The
+/// module may import the core and nothing else.
+pub fn module_exports(specifier: &str, code: &str) -> Result<Vec<String>, Error> {
     on_own_thread(|| {
-        with_prelude(|scope, namespace| {
+        with_module(code, specifier, |scope, namespace| {
             let names = namespace
                 .get_own_property_names(scope, v8::GetPropertyNamesArgsBuilder::new().build())
-                .ok_or_else(|| Error::internal("cannot enumerate the prelude's exports"))?;
+                .ok_or_else(|| Error::internal(format!("cannot enumerate the exports of {specifier}")))?;
             let mut out = Vec::new();
             for i in 0..names.length() {
                 if let Some(key) = names.get_index(scope, i).filter(|k| k.is_string()) {
@@ -36,7 +44,7 @@ pub fn prelude_exports() -> Result<Vec<String>, Error> {
 #[doc(hidden)]
 pub fn standard_block_frames() -> Result<(usize, usize), Error> {
     on_own_thread(|| {
-        with_prelude(|scope, namespace| {
+        with_module(PRELUDE, PRELUDE_SPECIFIER, |scope, namespace| {
             let prelude = get(scope, namespace, "BLOCK_FRAMES")
                 .and_then(|v| v.number_value(scope))
                 .ok_or_else(|| Error::contract("the prelude exports no BLOCK_FRAMES"))?;
@@ -49,9 +57,11 @@ pub fn standard_block_frames() -> Result<(usize, usize), Error> {
     })
 }
 
-/// A fresh isolate with the standard math and the prelude evaluated, and `body` over the
-/// prelude's namespace.
-fn with_prelude<T>(
+/// A fresh isolate with the standard math evaluated, then `code` as a module named `specifier`
+/// (the prelude itself, or a module importing it), and `body` over that module's namespace.
+fn with_module<T>(
+    code: &str,
+    specifier: &str,
     body: impl for<'a, 'b> FnOnce(&mut v8::PinScope<'a, 'b>, v8::Local<'a, v8::Object>) -> Result<T, Error>,
 ) -> Result<T, Error> {
     init_v8();
@@ -79,13 +89,17 @@ fn with_prelude<T>(
     install_standard_math(scope)?;
     let namespace = {
         v8::tc_scope!(let tc, scope);
-        let module = compile_registered(tc, PRELUDE, PRELUDE_SPECIFIER, None).ok_or_else(|| caught_in(tc, ErrorKind::Compile))?;
-        // The prelude imports nothing, so the resolve callback is never reached.
-        if module.instantiate_module(tc, resolve_module).is_none() || module.evaluate(tc).is_none() {
+        let module = compile_registered(tc, code, specifier, None).ok_or_else(|| caught_in(tc, ErrorKind::Compile))?;
+        // The resolve callback hands `"syrinx"` the prelude before it asks where the importer lives,
+        // so a module compiled without a path may import the core; anything relative fails.
+        if module.instantiate_module(tc, resolve_module).is_none() {
+            return Err(caught_in(tc, ErrorKind::Compile));
+        }
+        if module.evaluate(tc).is_none() {
             return Err(caught_in(tc, ErrorKind::Runtime));
         }
         v8::Local::<v8::Object>::try_from(module.get_module_namespace())
-            .map_err(|_| Error::internal("prelude namespace is not an object"))?
+            .map_err(|_| Error::internal(format!("{specifier} namespace is not an object")))?
     };
     body(scope, namespace)
 }

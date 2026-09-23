@@ -47,7 +47,7 @@ use wrapper::read_stems;
 
 pub use mixer::Mixer;
 pub use source::Source;
-pub use standard::{prelude_exports, standard_block_frames};
+pub use standard::{module_exports, prelude_exports, standard_block_frames};
 pub use stem::Stem;
 pub use stream::Stream;
 

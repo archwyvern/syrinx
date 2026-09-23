@@ -12,7 +12,6 @@
 
 /**
  * What a source declares about itself. The fields are checked in this order.
- * @core
  */
 export interface Meta {
   /** Contract version the source was written against: 4. Required; any other is refused. */
@@ -32,7 +31,6 @@ export interface Meta {
 }
 /**
  * What every layer and the mix are given.
- * @core
  */
 export interface Context {
   /** Sample rate in Hz. */
@@ -49,7 +47,6 @@ export interface Context {
 
 /**
  * What a layer is given: the context, plus which layer it is.
- * @core
  */
 export interface StemContext extends Context {
   /** This layer's name, as declared in `stems`. */
@@ -58,7 +55,6 @@ export interface StemContext extends Context {
 
 /**
  * What the default export is given: the context, plus the rendered layers.
- * @core
  */
 export interface MixContext extends Context {
   /**
@@ -70,7 +66,6 @@ export interface MixContext extends Context {
 
 /**
  * What a layer or the mix returns: mono samples, or [left, right].
- * @core
  */
 export type Output = Float32Array | number[] | [Float32Array | number[], Float32Array | number[]];
 
@@ -78,25 +73,21 @@ export type Output = Float32Array | number[] | [Float32Array | number[], Float32
  * A streaming layer: called once per block of BLOCK_FRAMES, in order from offset 0 (the last
  * block is shorter), returning exactly `frames` samples per plane. State kept in the closure
  * persists between blocks.
- * @core
  */
 export type Stream = (offset: number, frames: number) => Output;
 
 /**
  * A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples.
- * @core
  */
 export type MixStream = (offset: number, frames: number, stems: Record<string, Float32Array[]>) => Output;
 
 /**
  * A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order.
- * @core
  */
 export type Stems = Record<string, (ctx: StemContext) => Output | Stream>;
 
 /**
  * The shape of a source module.
- * @core
  */
 export interface Source {
   meta: Meta;
@@ -108,12 +99,10 @@ export interface Source {
 
 /**
  * The contract version this module implements: 4.
- * @core
  */
 export const PRELUDE_VERSION: number;
 /**
  * Frames per block of a stream: a constant of the standard (4096).
- * @core
  */
 export const BLOCK_FRAMES: number;
 
@@ -121,7 +110,6 @@ export const BLOCK_FRAMES: number;
 
 /**
  * FNV-1a over the arguments, as a seed: `new Random(hash(ctx.seed, "kick"))`.
- * @core
  */
 export function hash(...parts: (number | string)[]): number;
 
@@ -129,7 +117,6 @@ export function hash(...parts: (number | string)[]): number;
 
 /**
  * Seeded PRNG (mulberry32). The only randomness a source may use.
- * @core
  */
 export class Random {
   constructor(seed?: number);
@@ -150,6 +137,5 @@ export class Random {
 /**
  * True while the host is computing one block of a stream; false during a layer's setup and for a
  * whole-buffer layer. Code that needs the whole render (a peak, an ending) refuses when it is true.
- * @core
  */
 export function inBlock(): boolean;

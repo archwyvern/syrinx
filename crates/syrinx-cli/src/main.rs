@@ -136,11 +136,12 @@ enum Command {
     },
     /// Print version and build information.
     Info,
-    /// Print the prelude source (the library every sound is compiled against).
+    /// Print the prelude: the core module every sound imports as "syrinx".
     Prelude,
-    /// Print the TypeScript declarations for the prelude and the source contract.
+    /// Print the TypeScript declarations for the core module and the source contract.
     Types,
-    /// Print the prelude's API reference as JSON, for a documentation site to render.
+    /// Print the API reference -- the core module's and the framework's -- as JSON, for a
+    /// documentation site to render.
     Docs {
         /// Write to this file instead of standard output.
         #[arg(short, long)]
@@ -539,12 +540,15 @@ fn run() -> Result<()> {
             match out {
                 Some(path) => {
                     std::fs::write(&path, &json).with_context(|| format!("writing {}", path.display()))?;
-                    eprintln!(
-                        "{} entr(ies) in {} group(s) -> {}",
-                        docs.groups.iter().map(|g| g.entries.len()).sum::<usize>(),
-                        docs.groups.len(),
-                        path.display()
-                    );
+                    for module in &docs.modules {
+                        eprintln!(
+                            "{}: {} entr(ies) in {} group(s)",
+                            module.module,
+                            module.groups.iter().map(|g| g.entries.len()).sum::<usize>(),
+                            module.groups.len()
+                        );
+                    }
+                    eprintln!("-> {}", path.display());
                 }
                 None => print!("{json}"),
             }

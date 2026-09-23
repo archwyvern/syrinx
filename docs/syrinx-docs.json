@@ -1,862 +1,851 @@
 {
-  "schema": 2,
+  "schema": 3,
   "generator": "syrinx",
-  "api": 3,
-  "apiFloor": 2,
+  "version": "0.4.2",
+  "api": 4,
+  "apiFloor": 4,
   "blockFrames": 4096,
-  "module": "syrinx",
-  "summary": "The syrinx module: everything a sound source can import.\n\nA source is an ES module that imports from \"syrinx\", exports `meta` and `stems`, and may\ndefault-export a function combining them. A layer, and the mix, return their samples whole or\nas a stream the host pulls one block at a time. `syrinx types` emits these declarations; point\nan editor at them (a jsconfig.json, or Monaco's addExtraLib) for autocomplete and hover. Sources\nare plain JavaScript -- the types are for tooling, not because anything is compiled from\nTypeScript.",
-  "groups": [
+  "modules": [
     {
-      "name": "The source contract",
-      "entries": [
+      "module": "syrinx",
+      "part": "core",
+      "summary": "The syrinx module: the core of the standard, and the shape of a source.\n\nA source is an ES module that imports from \"syrinx\", exports `meta` and `stems`, and may\ndefault-export a function combining them. A layer, and the mix, return their samples whole or\nas a stream the host pulls one block at a time. What the core exports is what the standard\nneeds a source to have; oscillators, filters and the rest are the framework (framework/dsp.d.ts\nand its siblings). `syrinx types` emits these declarations; point an editor at them (a\njsconfig.json, or Monaco's addExtraLib) for autocomplete and hover. Sources are plain\nJavaScript -- the types are for tooling, not because anything is compiled from TypeScript.",
+      "groups": [
         {
-          "kind": "interface",
-          "name": "Meta",
-          "signature": "export interface Meta",
-          "doc": "What a source declares about itself.",
-          "members": [
+          "name": "The source contract",
+          "entries": [
             {
-              "kind": "property",
-              "name": "name",
-              "signature": "name?: string",
-              "doc": "Display name; defaults to the file stem."
+              "kind": "interface",
+              "name": "Meta",
+              "signature": "export interface Meta",
+              "doc": "What a source declares about itself. The fields are checked in this order.",
+              "members": [
+                {
+                  "kind": "property",
+                  "name": "api",
+                  "signature": "api: number",
+                  "doc": "Contract version the source was written against: 4. Required; any other is refused."
+                },
+                {
+                  "kind": "property",
+                  "name": "name",
+                  "signature": "name?: string",
+                  "doc": "Display name. No default: a source that declares none has none."
+                },
+                {
+                  "kind": "property",
+                  "name": "duration",
+                  "signature": "duration: number",
+                  "doc": "Length in seconds, in (0, 600]. Required."
+                },
+                {
+                  "kind": "property",
+                  "name": "channels",
+                  "signature": "channels?: 1 | 2",
+                  "doc": "1 (default) or 2. A mono return is duplicated when this is 2."
+                },
+                {
+                  "kind": "property",
+                  "name": "sampleRate",
+                  "signature": "sampleRate?: number",
+                  "doc": "Preferred sample rate, an integer in [8000, 192000]; a host may override it. Default 48000."
+                },
+                {
+                  "kind": "property",
+                  "name": "seed",
+                  "signature": "seed?: number",
+                  "doc": "An integer in [0, 4294967295], handed to every layer and to the mix as `ctx.seed`. Default 0."
+                },
+                {
+                  "kind": "property",
+                  "name": "loop",
+                  "signature": "loop?: boolean",
+                  "doc": "Declared seamless loop. Passed through to consumers; it changes no sample."
+                }
+              ]
             },
             {
-              "kind": "property",
-              "name": "duration",
-              "signature": "duration: number",
-              "doc": "Length in seconds. Required."
+              "kind": "interface",
+              "name": "Context",
+              "signature": "export interface Context",
+              "doc": "What every layer and the mix are given.",
+              "members": [
+                {
+                  "kind": "property",
+                  "name": "sr",
+                  "signature": "sr: number",
+                  "doc": "Sample rate in Hz."
+                },
+                {
+                  "kind": "property",
+                  "name": "frames",
+                  "signature": "frames: number",
+                  "doc": "Number of frames to produce: round(duration * sr)."
+                },
+                {
+                  "kind": "property",
+                  "name": "duration",
+                  "signature": "duration: number",
+                  "doc": "Seconds, as declared."
+                },
+                {
+                  "kind": "property",
+                  "name": "seed",
+                  "signature": "seed: number",
+                  "doc": "meta.seed, the same for every layer. Derive a voice's own with `hash(ctx.seed, \"kick\")`."
+                },
+                {
+                  "kind": "property",
+                  "name": "channels",
+                  "signature": "channels: 1 | 2",
+                  "doc": "meta.channels."
+                }
+              ]
             },
             {
-              "kind": "property",
-              "name": "channels",
-              "signature": "channels?: 1 | 2",
-              "doc": "1 (default) or 2. A mono return is duplicated when this is 2."
+              "kind": "interface",
+              "name": "StemContext",
+              "signature": "export interface StemContext extends Context",
+              "doc": "What a layer is given: the context, plus which layer it is.",
+              "members": [
+                {
+                  "kind": "property",
+                  "name": "stem",
+                  "signature": "stem: string",
+                  "doc": "This layer's name, as declared in `stems`."
+                }
+              ]
             },
             {
-              "kind": "property",
-              "name": "sampleRate",
-              "signature": "sampleRate?: number",
-              "doc": "Preferred sample rate; the compiler may override it. Default 48000."
+              "kind": "interface",
+              "name": "MixContext",
+              "signature": "export interface MixContext extends Context",
+              "doc": "What the default export is given: the context, plus the rendered layers.",
+              "members": [
+                {
+                  "kind": "property",
+                  "name": "stems",
+                  "signature": "stems: Record<string, Float32Array[]>",
+                  "doc": "Each layer by name, as `channels` planes of `frames` samples. Reading one makes the mix\nwhole-buffer; a mix stream never reads it and gets its layers' blocks as its third argument."
+                }
+              ]
             },
             {
-              "kind": "property",
-              "name": "seed",
-              "signature": "seed?: number",
-              "doc": "Passed to every stem and to the mix as `ctx.seed`. Default 0."
+              "kind": "alias",
+              "name": "Output",
+              "signature": "export type Output = Float32Array | number[] | [Float32Array | number[], Float32Array | number[]]",
+              "doc": "What a layer or the mix returns: mono samples, or [left, right]."
             },
             {
-              "kind": "property",
-              "name": "loop",
-              "signature": "loop?: boolean",
-              "doc": "Declared seamless loop. Passed through to consumers."
+              "kind": "callback",
+              "name": "Stream",
+              "signature": "export type Stream = (offset: number, frames: number) => Output",
+              "doc": "A streaming layer: called once per block of BLOCK_FRAMES, in order from offset 0 (the last\nblock is shorter), returning exactly `frames` samples per plane. State kept in the closure\npersists between blocks."
             },
             {
-              "kind": "property",
-              "name": "api",
-              "signature": "api?: number",
-              "doc": "Contract version the source was written against, 2 or 3; compile fails on anything else."
+              "kind": "callback",
+              "name": "MixStream",
+              "signature": "export type MixStream = (offset: number, frames: number, stems: Record<string, Float32Array[]>) => Output",
+              "doc": "A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples."
+            },
+            {
+              "kind": "callback",
+              "name": "Stems",
+              "signature": "export type Stems = Record<string, (ctx: StemContext) => Output | Stream>",
+              "doc": "A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order."
+            },
+            {
+              "kind": "interface",
+              "name": "Source",
+              "signature": "export interface Source",
+              "doc": "The shape of a source module.",
+              "members": [
+                {
+                  "kind": "property",
+                  "name": "meta",
+                  "signature": "meta: Meta"
+                },
+                {
+                  "kind": "property",
+                  "name": "stems",
+                  "signature": "stems: Stems"
+                },
+                {
+                  "kind": "property",
+                  "name": "default",
+                  "signature": "default?: (ctx: MixContext) => Output | MixStream"
+                }
+              ]
             }
-          ],
-          "core": true
+          ]
         },
         {
-          "kind": "interface",
-          "name": "Context",
-          "signature": "export interface Context",
-          "doc": "What every layer and the mix are given.",
-          "members": [
+          "name": "Constants",
+          "entries": [
             {
-              "kind": "property",
-              "name": "sr",
-              "signature": "sr: number",
-              "doc": "Sample rate in Hz."
+              "kind": "constant",
+              "name": "PRELUDE_VERSION",
+              "signature": "export const PRELUDE_VERSION: number",
+              "doc": "The contract version this module implements: 4."
             },
             {
-              "kind": "property",
-              "name": "frames",
-              "signature": "frames: number",
-              "doc": "Number of frames to produce: round(duration * sr)."
-            },
-            {
-              "kind": "property",
-              "name": "duration",
-              "signature": "duration: number",
-              "doc": "Seconds, as declared."
-            },
-            {
-              "kind": "property",
-              "name": "seed",
-              "signature": "seed: number",
-              "doc": "meta.seed, the same for every layer. Derive a voice's own with `hash(ctx.seed, \"kick\")`."
-            },
-            {
-              "kind": "property",
-              "name": "channels",
-              "signature": "channels: 1 | 2",
-              "doc": "meta.channels."
+              "kind": "constant",
+              "name": "BLOCK_FRAMES",
+              "signature": "export const BLOCK_FRAMES: number",
+              "doc": "Frames per block of a stream: a constant of the standard (4096)."
             }
-          ],
-          "core": true
+          ]
         },
         {
-          "kind": "interface",
-          "name": "StemContext",
-          "signature": "export interface StemContext extends Context",
-          "doc": "What a layer is given: the context, plus which layer it is.",
-          "members": [
+          "name": "Seeds",
+          "entries": [
             {
-              "kind": "property",
-              "name": "stem",
-              "signature": "stem: string",
-              "doc": "This layer's name, as declared in `stems`."
+              "kind": "function",
+              "name": "hash",
+              "signature": "export function hash(...parts: (number | string)[]): number",
+              "doc": "FNV-1a over the arguments, as a seed: `new Random(hash(ctx.seed, \"kick\"))`."
             }
-          ],
-          "core": true
+          ]
         },
         {
-          "kind": "interface",
-          "name": "MixContext",
-          "signature": "export interface MixContext extends Context",
-          "doc": "What the default export is given: the context, plus the rendered layers.",
-          "members": [
+          "name": "Randomness",
+          "entries": [
             {
-              "kind": "property",
-              "name": "stems",
-              "signature": "stems: Record<string, Float32Array[]>",
-              "doc": "Each layer by name, as `channels` planes of `frames` samples. Reading one makes the mix\nwhole-buffer; a mix stream never reads it and gets its layers' blocks as its third argument."
+              "kind": "class",
+              "name": "Random",
+              "signature": "export class Random",
+              "doc": "Seeded PRNG (mulberry32). The only randomness a source may use.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(seed?: number)"
+                },
+                {
+                  "kind": "method",
+                  "name": "next",
+                  "signature": "next(): number",
+                  "doc": "[0, 1)"
+                },
+                {
+                  "kind": "method",
+                  "name": "range",
+                  "signature": "range(lo: number, hi: number): number",
+                  "doc": "[lo, hi)"
+                },
+                {
+                  "kind": "method",
+                  "name": "bipolar",
+                  "signature": "bipolar(): number",
+                  "doc": "[-1, 1)"
+                },
+                {
+                  "kind": "method",
+                  "name": "int",
+                  "signature": "int(lo: number, hi: number): number",
+                  "doc": "Integer in [lo, hi)"
+                },
+                {
+                  "kind": "method",
+                  "name": "chance",
+                  "signature": "chance(p: number): boolean"
+                },
+                {
+                  "kind": "method",
+                  "name": "pick",
+                  "signature": "pick<T>(array: readonly T[]): T"
+                }
+              ]
             }
-          ],
-          "core": true
+          ]
         },
         {
-          "kind": "alias",
-          "name": "Output",
-          "signature": "export type Output = Float32Array | number[] | [Float32Array | number[], Float32Array | number[]]",
-          "doc": "What a layer or the mix returns: mono samples, or [left, right].",
-          "core": true
-        },
-        {
-          "kind": "callback",
-          "name": "Stream",
-          "signature": "export type Stream = (offset: number, frames: number) => Output",
-          "doc": "A streaming layer: called once per block of BLOCK_FRAMES, in order from offset 0 (the last\nblock is shorter), returning exactly `frames` samples per plane. State kept in the closure\npersists between blocks.",
-          "core": true
-        },
-        {
-          "kind": "callback",
-          "name": "MixStream",
-          "signature": "export type MixStream = (offset: number, frames: number, stems: Record<string, Float32Array[]>) => Output",
-          "doc": "A streaming mix: `stems[name]` is that layer's block as `channels` planes of `frames` samples.",
-          "core": true
-        },
-        {
-          "kind": "callback",
-          "name": "Stems",
-          "signature": "export type Stems = Record<string, (ctx: StemContext) => Output | Stream>",
-          "doc": "A source's layers, by name. Names match /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/ and keep their order.",
-          "core": true
-        },
-        {
-          "kind": "interface",
-          "name": "Source",
-          "signature": "export interface Source",
-          "doc": "The shape of a source module.",
-          "members": [
+          "name": "The block protocol",
+          "entries": [
             {
-              "kind": "property",
-              "name": "meta",
-              "signature": "meta: Meta"
-            },
-            {
-              "kind": "property",
-              "name": "stems",
-              "signature": "stems: Stems"
-            },
-            {
-              "kind": "property",
-              "name": "default",
-              "signature": "default?: (ctx: MixContext) => Output | MixStream"
+              "kind": "function",
+              "name": "inBlock",
+              "signature": "export function inBlock(): boolean",
+              "doc": "True while the host is computing one block of a stream; false during a layer's setup and for a\nwhole-buffer layer. Code that needs the whole render (a peak, an ending) refuses when it is true."
             }
-          ],
-          "core": true
+          ]
         }
       ]
     },
     {
-      "name": "Scalars",
-      "entries": [
+      "module": "framework/dsp.js",
+      "part": "framework",
+      "summary": "The syrinx framework's dsp module: the primitives a sound is made of. A project imports them by\nrelative path from wherever it vendored the framework: `import { Osc, Env } from\n\"./framework/dsp.js\"`. These declarations are for editors and the generated reference; the\nmodule is plain JavaScript.",
+      "groups": [
         {
-          "kind": "constant",
-          "name": "PRELUDE_VERSION",
-          "signature": "export const PRELUDE_VERSION: number",
-          "core": true
-        },
-        {
-          "kind": "constant",
-          "name": "BLOCK_FRAMES",
-          "signature": "export const BLOCK_FRAMES: number",
-          "doc": "Frames per block of a stream: a constant of the standard (4096).",
-          "core": true
-        },
-        {
-          "kind": "constant",
-          "name": "TAU",
-          "signature": "export const TAU: number",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "clamp",
-          "signature": "export function clamp(x: number, lo: number, hi: number): number",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "lerp",
-          "signature": "export function lerp(a: number, b: number, t: number): number",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "db",
-          "signature": "export function db(decibels: number): number",
-          "doc": "Decibels to linear gain.",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "mtof",
-          "signature": "export function mtof(midi: number): number",
-          "doc": "MIDI note number to Hz.",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "softclip",
-          "signature": "export function softclip(x: number): number",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "hardclip",
-          "signature": "export function hardclip(x: number): number",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "fold",
-          "signature": "export function fold(x: number): number",
-          "doc": "Wavefolder: reflects anything outside [-1, 1] back in.",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "hash",
-          "signature": "export function hash(...parts: (number | string)[]): number",
-          "doc": "FNV-1a over the arguments, as a seed: `new Noise(hash(ctx.seed, \"kick\"))`.",
-          "core": true
-        }
-      ]
-    },
-    {
-      "name": "Randomness",
-      "entries": [
-        {
-          "kind": "class",
-          "name": "Random",
-          "signature": "export class Random",
-          "doc": "Seeded PRNG (mulberry32). The only randomness a source may use.",
-          "members": [
+          "name": "Scalars",
+          "entries": [
             {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(seed?: number)"
+              "kind": "constant",
+              "name": "TAU",
+              "signature": "export const TAU: number"
             },
             {
-              "kind": "method",
-              "name": "next",
-              "signature": "next(): number",
-              "doc": "[0, 1)"
+              "kind": "function",
+              "name": "clamp",
+              "signature": "export function clamp(x: number, lo: number, hi: number): number"
             },
             {
-              "kind": "method",
-              "name": "range",
-              "signature": "range(lo: number, hi: number): number",
-              "doc": "[lo, hi)"
+              "kind": "function",
+              "name": "lerp",
+              "signature": "export function lerp(a: number, b: number, t: number): number"
             },
             {
-              "kind": "method",
-              "name": "bipolar",
-              "signature": "bipolar(): number",
-              "doc": "[-1, 1)"
+              "kind": "function",
+              "name": "db",
+              "signature": "export function db(decibels: number): number",
+              "doc": "Decibels to linear gain."
             },
             {
-              "kind": "method",
-              "name": "int",
-              "signature": "int(lo: number, hi: number): number",
-              "doc": "Integer in [lo, hi)"
+              "kind": "function",
+              "name": "mtof",
+              "signature": "export function mtof(midi: number): number",
+              "doc": "MIDI note number to Hz."
             },
             {
-              "kind": "method",
-              "name": "chance",
-              "signature": "chance(p: number): boolean"
+              "kind": "function",
+              "name": "softclip",
+              "signature": "export function softclip(x: number): number"
             },
             {
-              "kind": "method",
-              "name": "pick",
-              "signature": "pick<T>(array: readonly T[]): T"
+              "kind": "function",
+              "name": "hardclip",
+              "signature": "export function hardclip(x: number): number"
+            },
+            {
+              "kind": "function",
+              "name": "fold",
+              "signature": "export function fold(x: number): number",
+              "doc": "Wavefolder: reflects anything outside [-1, 1] back in."
             }
-          ],
-          "core": true
-        }
-      ]
-    },
-    {
-      "name": "Oscillators",
-      "entries": [
-        {
-          "kind": "class",
-          "name": "Phasor",
-          "signature": "export class Phasor",
-          "doc": "Phase accumulator in [0, 1).",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number, phase?: number)"
-            },
-            {
-              "kind": "property",
-              "name": "phase",
-              "signature": "phase: number"
-            },
-            {
-              "kind": "method",
-              "name": "next",
-              "signature": "next(freq: number): number",
-              "doc": "Advance one sample at `freq` Hz; returns the phase before advancing."
-            }
-          ],
-          "core": false
+          ]
         },
         {
-          "kind": "callback",
-          "name": "Shape",
-          "signature": "export type Shape = (phase: number, width: number) => number",
-          "core": false
+          "name": "Oscillators",
+          "entries": [
+            {
+              "kind": "class",
+              "name": "Phasor",
+              "signature": "export class Phasor",
+              "doc": "Phase accumulator in [0, 1).",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number, phase?: number)"
+                },
+                {
+                  "kind": "property",
+                  "name": "phase",
+                  "signature": "phase: number"
+                },
+                {
+                  "kind": "method",
+                  "name": "next",
+                  "signature": "next(freq: number): number",
+                  "doc": "Advance one sample at `freq` Hz; returns the phase before advancing."
+                }
+              ]
+            },
+            {
+              "kind": "callback",
+              "name": "Shape",
+              "signature": "export type Shape = (phase: number, width: number) => number"
+            },
+            {
+              "kind": "class",
+              "name": "Osc",
+              "signature": "export class Osc",
+              "doc": "Naive (aliasing) oscillators. Fine for most SFX; see BlepOsc for cleaner saws and squares.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number, shape: Shape, phase?: number)"
+                },
+                {
+                  "kind": "method",
+                  "name": "sine",
+                  "signature": "sine(sr: number, phase?: number): Osc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "saw",
+                  "signature": "saw(sr: number, phase?: number): Osc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "square",
+                  "signature": "square(sr: number, phase?: number): Osc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "tri",
+                  "signature": "tri(sr: number, phase?: number): Osc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "pulse",
+                  "signature": "pulse(sr: number, width?: number, phase?: number): Osc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "property",
+                  "name": "shapes",
+                  "signature": "shapes: { sine: Shape; saw: Shape; square: Shape; tri: Shape; pulse: Shape }",
+                  "isStatic": true
+                },
+                {
+                  "kind": "property",
+                  "name": "width",
+                  "signature": "width: number"
+                },
+                {
+                  "kind": "method",
+                  "name": "next",
+                  "signature": "next(freq: number): number"
+                }
+              ]
+            },
+            {
+              "kind": "class",
+              "name": "BlepOsc",
+              "signature": "export class BlepOsc",
+              "doc": "Band-limited saw and square via PolyBLEP.",
+              "members": [
+                {
+                  "kind": "method",
+                  "name": "saw",
+                  "signature": "saw(sr: number, phase?: number): BlepOsc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "square",
+                  "signature": "square(sr: number, phase?: number): BlepOsc",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "next",
+                  "signature": "next(freq: number): number"
+                }
+              ]
+            }
+          ]
         },
         {
-          "kind": "class",
-          "name": "Osc",
-          "signature": "export class Osc",
-          "doc": "Naive (aliasing) oscillators. Fine for most SFX; see BlepOsc for cleaner saws and squares.",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number, shape: Shape, phase?: number)"
-            },
-            {
-              "kind": "method",
-              "name": "sine",
-              "signature": "sine(sr: number, phase?: number): Osc",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "saw",
-              "signature": "saw(sr: number, phase?: number): Osc",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "square",
-              "signature": "square(sr: number, phase?: number): Osc",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "tri",
-              "signature": "tri(sr: number, phase?: number): Osc",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "pulse",
-              "signature": "pulse(sr: number, width?: number, phase?: number): Osc",
-              "isStatic": true
-            },
-            {
-              "kind": "property",
-              "name": "shapes",
-              "signature": "shapes: { sine: Shape; saw: Shape; square: Shape; tri: Shape; pulse: Shape }",
-              "isStatic": true
-            },
-            {
-              "kind": "property",
-              "name": "width",
-              "signature": "width: number"
-            },
-            {
-              "kind": "method",
-              "name": "next",
-              "signature": "next(freq: number): number"
-            }
-          ],
-          "core": false
-        },
-        {
-          "kind": "class",
-          "name": "BlepOsc",
-          "signature": "export class BlepOsc",
-          "doc": "Band-limited saw and square via PolyBLEP.",
-          "members": [
-            {
-              "kind": "method",
-              "name": "saw",
-              "signature": "saw(sr: number, phase?: number): BlepOsc",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "square",
-              "signature": "square(sr: number, phase?: number): BlepOsc",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "next",
-              "signature": "next(freq: number): number"
-            }
-          ],
-          "core": false
-        }
-      ]
-    },
-    {
-      "name": "Noise",
-      "entries": [
-        {
-          "kind": "class",
           "name": "Noise",
-          "signature": "export class Noise",
-          "doc": "Seeded noise. One instance per independent noise source.",
-          "members": [
+          "entries": [
             {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(seed?: number)"
-            },
-            {
-              "kind": "method",
-              "name": "white",
-              "signature": "white(): number",
-              "doc": "Uniform white in [-1, 1)."
-            },
-            {
-              "kind": "method",
-              "name": "pink",
-              "signature": "pink(): number",
-              "doc": "Pink (-3 dB/oct), roughly [-1, 1]."
-            },
-            {
-              "kind": "method",
-              "name": "brown",
-              "signature": "brown(): number",
-              "doc": "Brown (-6 dB/oct)."
+              "kind": "class",
+              "name": "Noise",
+              "signature": "export class Noise",
+              "doc": "Seeded noise. One instance per independent noise source.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(seed?: number)"
+                },
+                {
+                  "kind": "method",
+                  "name": "white",
+                  "signature": "white(): number",
+                  "doc": "Uniform white in [-1, 1)."
+                },
+                {
+                  "kind": "method",
+                  "name": "pink",
+                  "signature": "pink(): number",
+                  "doc": "Pink (-3 dB/oct), roughly [-1, 1]."
+                },
+                {
+                  "kind": "method",
+                  "name": "brown",
+                  "signature": "brown(): number",
+                  "doc": "Brown (-6 dB/oct)."
+                }
+              ]
             }
-          ],
-          "core": false
-        }
-      ]
-    },
-    {
-      "name": "Envelopes",
-      "entries": [
-        {
-          "kind": "callback",
-          "name": "Envelope",
-          "signature": "export type Envelope = (t: number) => number",
-          "doc": "An envelope is a function of time in seconds.",
-          "core": false
+          ]
         },
         {
-          "kind": "object",
-          "name": "Env",
-          "signature": "export const Env",
-          "members": [
+          "name": "Envelopes",
+          "entries": [
             {
-              "kind": "method",
-              "name": "ad",
-              "signature": "ad(attack: number, decay: number): Envelope",
-              "doc": "Linear attack, exponential decay to silence."
+              "kind": "callback",
+              "name": "Envelope",
+              "signature": "export type Envelope = (t: number) => number",
+              "doc": "An envelope is a function of time in seconds."
             },
             {
-              "kind": "method",
-              "name": "adsr",
-              "signature": "adsr(attack: number, decay: number, sustain: number, release: number, gate: number): Envelope",
-              "doc": "Linear attack, exponential decay to sustain, hold until `gate`, exponential release."
-            },
-            {
-              "kind": "method",
-              "name": "exp",
-              "signature": "exp(tau: number): Envelope",
-              "doc": "exp(-t / tau)"
-            },
-            {
-              "kind": "method",
-              "name": "line",
-              "signature": "line(from: number, to: number, duration: number): Envelope",
-              "doc": "Straight line from `from` to `to` over `duration`, clamped."
-            },
-            {
-              "kind": "method",
-              "name": "sweep",
-              "signature": "sweep(from: number, to: number, duration: number): Envelope",
-              "doc": "Exponential sweep from `from` to `to` over `duration` (both > 0), clamped."
-            },
-            {
-              "kind": "method",
-              "name": "gate",
-              "signature": "gate(duration: number, fade: number): Envelope",
-              "doc": "1 until `duration`, then linear fade to 0 over `fade`."
-            },
-            {
-              "kind": "method",
-              "name": "points",
-              "signature": "points(pts: [number, number][]): Envelope",
-              "doc": "Piecewise-linear through [[t0, v0], [t1, v1], ...] with ascending times."
+              "kind": "object",
+              "name": "Env",
+              "signature": "export const Env",
+              "members": [
+                {
+                  "kind": "method",
+                  "name": "ad",
+                  "signature": "ad(attack: number, decay: number): Envelope",
+                  "doc": "Linear attack, exponential decay to silence."
+                },
+                {
+                  "kind": "method",
+                  "name": "adsr",
+                  "signature": "adsr(attack: number, decay: number, sustain: number, release: number, gate: number): Envelope",
+                  "doc": "Linear attack, exponential decay to sustain, hold until `gate`, exponential release."
+                },
+                {
+                  "kind": "method",
+                  "name": "exp",
+                  "signature": "exp(tau: number): Envelope",
+                  "doc": "exp(-t / tau)"
+                },
+                {
+                  "kind": "method",
+                  "name": "line",
+                  "signature": "line(from: number, to: number, duration: number): Envelope",
+                  "doc": "Straight line from `from` to `to` over `duration`, clamped."
+                },
+                {
+                  "kind": "method",
+                  "name": "sweep",
+                  "signature": "sweep(from: number, to: number, duration: number): Envelope",
+                  "doc": "Exponential sweep from `from` to `to` over `duration` (both > 0), clamped."
+                },
+                {
+                  "kind": "method",
+                  "name": "gate",
+                  "signature": "gate(duration: number, fade: number): Envelope",
+                  "doc": "1 until `duration`, then linear fade to 0 over `fade`."
+                },
+                {
+                  "kind": "method",
+                  "name": "points",
+                  "signature": "points(pts: [number, number][]): Envelope",
+                  "doc": "Piecewise-linear through [[t0, v0], [t1, v1], ...] with ascending times."
+                }
+              ]
             }
-          ],
-          "core": false
-        }
-      ]
-    },
-    {
-      "name": "Filters",
-      "entries": [
-        {
-          "kind": "class",
-          "name": "OnePole",
-          "signature": "export class OnePole",
-          "doc": "One-pole low/high-pass, 6 dB/oct. Stateful: one instance per signal.",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number)"
-            },
-            {
-              "kind": "method",
-              "name": "lp",
-              "signature": "lp(x: number, cutoff: number): number"
-            },
-            {
-              "kind": "method",
-              "name": "hp",
-              "signature": "hp(x: number, cutoff: number): number"
-            }
-          ],
-          "core": false
+          ]
         },
         {
-          "kind": "choice",
-          "name": "BiquadType",
-          "signature": "export type BiquadType = | \"lowpass\" | \"highpass\" | \"bandpass\" | \"notch\" | \"allpass\" | \"peak\" | \"lowshelf\" | \"highshelf\"",
-          "values": [
-            "lowpass",
-            "highpass",
-            "bandpass",
-            "notch",
-            "allpass",
-            "peak",
-            "lowshelf",
-            "highshelf"
-          ],
-          "core": false
+          "name": "Filters",
+          "entries": [
+            {
+              "kind": "class",
+              "name": "OnePole",
+              "signature": "export class OnePole",
+              "doc": "One-pole low/high-pass, 6 dB/oct. Stateful: one instance per signal.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number)"
+                },
+                {
+                  "kind": "method",
+                  "name": "lp",
+                  "signature": "lp(x: number, cutoff: number): number"
+                },
+                {
+                  "kind": "method",
+                  "name": "hp",
+                  "signature": "hp(x: number, cutoff: number): number"
+                }
+              ]
+            },
+            {
+              "kind": "choice",
+              "name": "BiquadType",
+              "signature": "export type BiquadType = | \"lowpass\" | \"highpass\" | \"bandpass\" | \"notch\" | \"allpass\" | \"peak\" | \"lowshelf\" | \"highshelf\"",
+              "values": [
+                "lowpass",
+                "highpass",
+                "bandpass",
+                "notch",
+                "allpass",
+                "peak",
+                "lowshelf",
+                "highshelf"
+              ]
+            },
+            {
+              "kind": "class",
+              "name": "Biquad",
+              "signature": "export class Biquad",
+              "doc": "RBJ cookbook biquad. `set` is cheap enough to call per sample for modulation.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number)"
+                },
+                {
+                  "kind": "method",
+                  "name": "lowpass",
+                  "signature": "lowpass(sr: number, freq: number, q?: number): Biquad",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "highpass",
+                  "signature": "highpass(sr: number, freq: number, q?: number): Biquad",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "bandpass",
+                  "signature": "bandpass(sr: number, freq: number, q?: number): Biquad",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "notch",
+                  "signature": "notch(sr: number, freq: number, q?: number): Biquad",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "peak",
+                  "signature": "peak(sr: number, freq: number, q?: number, gainDb?: number): Biquad",
+                  "isStatic": true
+                },
+                {
+                  "kind": "method",
+                  "name": "set",
+                  "signature": "set(type: BiquadType, freq: number, q?: number, gainDb?: number): this"
+                },
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number): number"
+                }
+              ]
+            },
+            {
+              "kind": "class",
+              "name": "Svf",
+              "signature": "export class Svf",
+              "doc": "Chamberlin state-variable filter. `process` returns the lowpass; `.band` / `.high` hold the others.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number)"
+                },
+                {
+                  "kind": "property",
+                  "name": "low",
+                  "signature": "low: number"
+                },
+                {
+                  "kind": "property",
+                  "name": "band",
+                  "signature": "band: number"
+                },
+                {
+                  "kind": "property",
+                  "name": "high",
+                  "signature": "high: number"
+                },
+                {
+                  "kind": "method",
+                  "name": "set",
+                  "signature": "set(cutoff: number, resonance?: number): this"
+                },
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number): number"
+                }
+              ]
+            }
+          ]
         },
         {
-          "kind": "class",
-          "name": "Biquad",
-          "signature": "export class Biquad",
-          "doc": "RBJ cookbook biquad. `set` is cheap enough to call per sample for modulation.",
-          "members": [
+          "name": "Delays and reverb",
+          "entries": [
             {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number)"
+              "kind": "class",
+              "name": "Delay",
+              "signature": "export class Delay",
+              "doc": "Circular delay line with linear-interpolated reads.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number, maxSeconds: number)"
+                },
+                {
+                  "kind": "method",
+                  "name": "read",
+                  "signature": "read(seconds: number): number",
+                  "doc": "Read `seconds` back from the write head."
+                },
+                {
+                  "kind": "method",
+                  "name": "write",
+                  "signature": "write(x: number): void"
+                },
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number, seconds: number): number",
+                  "doc": "write then read."
+                }
+              ]
             },
             {
-              "kind": "method",
-              "name": "lowpass",
-              "signature": "lowpass(sr: number, freq: number, q?: number): Biquad",
-              "isStatic": true
+              "kind": "class",
+              "name": "Comb",
+              "signature": "export class Comb",
+              "doc": "Feedback comb with one-pole damping in the loop.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number, seconds: number, feedback?: number, damp?: number)"
+                },
+                {
+                  "kind": "property",
+                  "name": "feedback",
+                  "signature": "feedback: number"
+                },
+                {
+                  "kind": "property",
+                  "name": "damp",
+                  "signature": "damp: number"
+                },
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number): number"
+                }
+              ]
             },
             {
-              "kind": "method",
-              "name": "highpass",
-              "signature": "highpass(sr: number, freq: number, q?: number): Biquad",
-              "isStatic": true
+              "kind": "class",
+              "name": "Allpass",
+              "signature": "export class Allpass",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number, seconds: number, gain?: number)"
+                },
+                {
+                  "kind": "property",
+                  "name": "gain",
+                  "signature": "gain: number"
+                },
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number): number"
+                }
+              ]
             },
             {
-              "kind": "method",
-              "name": "bandpass",
-              "signature": "bandpass(sr: number, freq: number, q?: number): Biquad",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "notch",
-              "signature": "notch(sr: number, freq: number, q?: number): Biquad",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "peak",
-              "signature": "peak(sr: number, freq: number, q?: number, gainDb?: number): Biquad",
-              "isStatic": true
-            },
-            {
-              "kind": "method",
-              "name": "set",
-              "signature": "set(type: BiquadType, freq: number, q?: number, gainDb?: number): this"
-            },
-            {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number): number"
+              "kind": "class",
+              "name": "Reverb",
+              "signature": "export class Reverb",
+              "doc": "Small Schroeder reverb: 4 combs into 2 allpasses.",
+              "members": [
+                {
+                  "kind": "constructor",
+                  "name": "constructor",
+                  "signature": "constructor(sr: number, options?: { size?: number; damp?: number; feedback?: number })"
+                },
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number): number"
+                }
+              ]
             }
-          ],
-          "core": false
+          ]
         },
         {
-          "kind": "class",
-          "name": "Svf",
-          "signature": "export class Svf",
-          "doc": "Chamberlin state-variable filter. `process` returns the lowpass; `.band` / `.high` hold the others.",
-          "members": [
+          "name": "Buffers",
+          "entries": [
             {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number)"
+              "kind": "interface",
+              "name": "Processor",
+              "signature": "export interface Processor",
+              "doc": "Anything with a per-sample `process`.",
+              "members": [
+                {
+                  "kind": "method",
+                  "name": "process",
+                  "signature": "process(x: number): number"
+                }
+              ]
             },
             {
-              "kind": "property",
-              "name": "low",
-              "signature": "low: number"
+              "kind": "function",
+              "name": "render",
+              "signature": "export function render(ctx: Context, fn: (t: number, i: number) => number): Float32Array",
+              "doc": "Run `fn(t, i)` once per frame and collect the result."
             },
             {
-              "kind": "property",
-              "name": "band",
-              "signature": "band: number"
+              "kind": "function",
+              "name": "stream",
+              "signature": "export function stream(ctx: Context, fn: (t: number, i: number) => number): Stream",
+              "doc": "render(), one block at a time: a stream that is bit-identical to `render(ctx, fn)` over the same frames."
             },
             {
-              "kind": "property",
-              "name": "high",
-              "signature": "high: number"
+              "kind": "function",
+              "name": "mix",
+              "signature": "export function mix(...buffers: ArrayLike<number>[]): Float32Array",
+              "doc": "Sum buffers sample-wise; the result is as long as the longest."
             },
             {
-              "kind": "method",
-              "name": "set",
-              "signature": "set(cutoff: number, resonance?: number): this"
-            },
-            {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number): number"
-            }
-          ],
-          "core": false
-        }
-      ]
-    },
-    {
-      "name": "Delays and reverb",
-      "entries": [
-        {
-          "kind": "class",
-          "name": "Delay",
-          "signature": "export class Delay",
-          "doc": "Circular delay line with linear-interpolated reads.",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number, maxSeconds: number)"
-            },
-            {
-              "kind": "method",
-              "name": "read",
-              "signature": "read(seconds: number): number",
-              "doc": "Read `seconds` back from the write head."
-            },
-            {
-              "kind": "method",
-              "name": "write",
-              "signature": "write(x: number): void"
-            },
-            {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number, seconds: number): number",
-              "doc": "write then read."
-            }
-          ],
-          "core": false
-        },
-        {
-          "kind": "class",
-          "name": "Comb",
-          "signature": "export class Comb",
-          "doc": "Feedback comb with one-pole damping in the loop.",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number, seconds: number, feedback?: number, damp?: number)"
-            },
-            {
-              "kind": "property",
-              "name": "feedback",
-              "signature": "feedback: number"
-            },
-            {
-              "kind": "property",
-              "name": "damp",
-              "signature": "damp: number"
-            },
-            {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number): number"
-            }
-          ],
-          "core": false
-        },
-        {
-          "kind": "class",
-          "name": "Allpass",
-          "signature": "export class Allpass",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number, seconds: number, gain?: number)"
-            },
-            {
-              "kind": "property",
+              "kind": "function",
               "name": "gain",
-              "signature": "gain: number"
+              "signature": "export function gain(buffer: ArrayLike<number>, g: number): Float32Array"
             },
             {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number): number"
-            }
-          ],
-          "core": false
-        },
-        {
-          "kind": "class",
-          "name": "Reverb",
-          "signature": "export class Reverb",
-          "doc": "Small Schroeder reverb: 4 combs into 2 allpasses.",
-          "members": [
-            {
-              "kind": "constructor",
-              "name": "constructor",
-              "signature": "constructor(sr: number, options?: { size?: number; damp?: number; feedback?: number })"
+              "kind": "function",
+              "name": "normalize",
+              "signature": "export function normalize(buffer: ArrayLike<number>, peak?: number): Float32Array",
+              "doc": "Scale so the absolute peak hits `peak` (default -1 dBFS). Silence is left alone. Refuses inside a stream's block: use a limiter or a fixed gain."
             },
             {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number): number"
-            }
-          ],
-          "core": false
-        }
-      ]
-    },
-    {
-      "name": "Buffers",
-      "entries": [
-        {
-          "kind": "interface",
-          "name": "Processor",
-          "signature": "export interface Processor",
-          "doc": "Anything with a per-sample `process`.",
-          "members": [
+              "kind": "function",
+              "name": "fade",
+              "signature": "export function fade(ctx: Context, buffer: ArrayLike<number>, fadeIn: number, fadeOut: number): Float32Array",
+              "doc": "Linear fade-in over `fadeIn` seconds and fade-out over `fadeOut` seconds. Refuses inside a stream's block: shape the level from the absolute time."
+            },
             {
-              "kind": "method",
-              "name": "process",
-              "signature": "process(x: number): number"
+              "kind": "function",
+              "name": "pan",
+              "signature": "export function pan(buffer: ArrayLike<number>, position?: number): [Float32Array, Float32Array]",
+              "doc": "Constant-power pan; position in [-1, 1]."
+            },
+            {
+              "kind": "function",
+              "name": "place",
+              "signature": "export function place(ctx: Context, buffer: ArrayLike<number>, at: number): Float32Array",
+              "doc": "Place `buffer` into a new ctx.frames-long buffer starting at `at` seconds. Refuses inside a stream's block: copy into the block from `round(at * sr) - offset`."
+            },
+            {
+              "kind": "function",
+              "name": "filter",
+              "signature": "export function filter(buffer: ArrayLike<number>, processor: Processor): Float32Array",
+              "doc": "Apply a per-sample processor over a buffer."
             }
-          ],
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "render",
-          "signature": "export function render(ctx: Context, fn: (t: number, i: number) => number): Float32Array",
-          "doc": "Run `fn(t, i)` once per frame and collect the result.",
-          "core": true
-        },
-        {
-          "kind": "function",
-          "name": "stream",
-          "signature": "export function stream(ctx: Context, fn: (t: number, i: number) => number): Stream",
-          "doc": "render(), one block at a time: a stream that is bit-identical to `render(ctx, fn)` over the same frames.",
-          "core": true
-        },
-        {
-          "kind": "function",
-          "name": "mix",
-          "signature": "export function mix(...buffers: ArrayLike<number>[]): Float32Array",
-          "doc": "Sum buffers sample-wise; the result is as long as the longest.",
-          "core": true
-        },
-        {
-          "kind": "function",
-          "name": "gain",
-          "signature": "export function gain(buffer: ArrayLike<number>, g: number): Float32Array",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "normalize",
-          "signature": "export function normalize(buffer: ArrayLike<number>, peak?: number): Float32Array",
-          "doc": "Scale so the absolute peak hits `peak` (default -1 dBFS). Silence is left alone. Refuses inside a stream's block: use a limiter or a fixed gain.",
-          "core": true
-        },
-        {
-          "kind": "function",
-          "name": "fade",
-          "signature": "export function fade(ctx: Context, buffer: ArrayLike<number>, fadeIn: number, fadeOut: number): Float32Array",
-          "doc": "Linear fade-in over `fadeIn` seconds and fade-out over `fadeOut` seconds. Refuses inside a stream's block: shape the level from the absolute time.",
-          "core": true
-        },
-        {
-          "kind": "function",
-          "name": "pan",
-          "signature": "export function pan(buffer: ArrayLike<number>, position?: number): [Float32Array, Float32Array]",
-          "doc": "Constant-power pan; position in [-1, 1].",
-          "core": false
-        },
-        {
-          "kind": "function",
-          "name": "place",
-          "signature": "export function place(ctx: Context, buffer: ArrayLike<number>, at: number): Float32Array",
-          "doc": "Place `buffer` into a new ctx.frames-long buffer starting at `at` seconds. Refuses inside a stream's block: copy into the block from `round(at * sr) - offset`.",
-          "core": true
-        },
-        {
-          "kind": "function",
-          "name": "filter",
-          "signature": "export function filter(buffer: ArrayLike<number>, processor: Processor): Float32Array",
-          "doc": "Apply a per-sample processor over a buffer.",
-          "core": false
+          ]
         }
       ]
     }

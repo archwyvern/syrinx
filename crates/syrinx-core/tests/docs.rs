@@ -14,21 +14,31 @@ fn committed_reference_is_current() {
 
 /// The boundary between the standard's core module and the framework (SPEC.md, clauses 12-13).
 /// Moving a name across it changes what a conforming host must ship, so it is pinned here: a
-/// change to this list is a change to the standard, made on purpose.
+/// change to either list is a change to the standard, made on purpose.
 #[test]
-fn core_module_is_exactly_the_tagged_declarations() {
-    let docs = syrinx_core::docs::docs().expect("declarations and prelude agree");
-    let mut core: Vec<&str> =
-        docs.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.core).map(|e| e.name.as_str()).collect();
-    core.sort_unstable();
-    let mut expected = vec![
+fn the_core_and_the_framework_are_exactly_these() {
+    let docs = syrinx_core::docs::docs().expect("declarations and modules agree");
+    let names = |i: usize| {
+        let mut names: Vec<&str> =
+            docs.modules[i].groups.iter().flat_map(|g| g.entries.iter()).map(|e| e.name.as_str()).collect();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(docs.modules[0].module, "syrinx");
+    let mut core = vec![
         "BLOCK_FRAMES", "Context", "Meta", "MixContext", "MixStream", "Output", "PRELUDE_VERSION", "Random", "Source",
-        "StemContext", "Stems", "Stream", "fade", "hash", "mix", "normalize", "place", "render", "stream",
+        "StemContext", "Stems", "Stream", "hash", "inBlock",
     ];
-    expected.sort_unstable();
-    assert_eq!(core, expected);
-    // The tag is metadata, not prose: it never reaches a reader.
-    assert!(docs.groups.iter().flat_map(|g| g.entries.iter()).all(|e| !e.doc.contains("@core")));
+    core.sort_unstable();
+    assert_eq!(names(0), core);
+    assert_eq!(docs.modules[1].module, "framework/dsp.js");
+    let mut dsp = vec![
+        "Allpass", "BiquadType", "Biquad", "BlepOsc", "Comb", "Delay", "Env", "Envelope", "Noise", "OnePole", "Osc", "Phasor",
+        "Processor", "Reverb", "Shape", "Svf", "TAU", "clamp", "db", "fade", "filter", "fold", "gain", "hardclip", "lerp",
+        "mix", "mtof", "normalize", "pan", "place", "render", "softclip", "stream",
+    ];
+    dsp.sort_unstable();
+    assert_eq!(names(1), dsp);
 }
 
 /// What `"syrinx"` exports at run time is the core and nothing else (SPEC.md, clause 12). The

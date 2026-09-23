@@ -1,13 +1,12 @@
-//! The prelude's API reference, extracted from its type declarations.
+//! The API reference, extracted from type declarations: the core module's (`prelude/syrinx.d.ts`,
+//! [`TYPES`]) and the framework's (`framework/dsp.d.ts`).
 //!
-//! [`TYPES`](crate::TYPES) is the declared surface of the `"syrinx"` module, with a doc comment
-//! on every export and `// ---- Name` markers dividing it into sections. [`docs`] turns that into
-//! structured JSON for a documentation site to render, and checks it against the prelude's real
-//! exports so the two cannot drift apart unnoticed.
-//!
-//! A declaration whose doc comment carries an `@core` line belongs to the standard's core module:
-//! what a conforming host must know about (SPEC.md, clause 12). Everything else is framework. The
-//! tag lives on the declaration so the boundary cannot name an export that no longer exists.
+//! Each declarations file is the declared surface of one module, with a doc comment on every
+//! export and `// ---- Name` markers dividing it into sections. [`docs`] turns them into structured
+//! JSON for a documentation site to render, and checks each against its module's real exports so
+//! the two cannot drift apart unnoticed. Which part of the reference an entry belongs to -- the
+//! standard's core module (SPEC.md, clause 12) or the framework (clause 13) -- is decided by the
+//! file it is declared in.
 //!
 //! The parser is deliberately strict: a line it does not recognise is an error, not a skip.
 //! Silently dropping an export would produce documentation that is quietly incomplete, which is
@@ -15,10 +14,11 @@
 
 use serde::Serialize;
 
-use crate::{Error, PRELUDE_VERSION, TYPES};
+use crate::{Error, API_FLOOR, BLOCK_FRAMES, PRELUDE_VERSION, TYPES};
 
-/// Version of this JSON shape. 2 added [`Entry::core`], [`Docs::api_floor`] and [`Docs::block_frames`].
-pub const DOCS_SCHEMA: u32 = 2;
+/// Version of this JSON shape. 3 replaced the `core` flag on entries with modules, each a part of
+/// the reference: the core, or the framework.
+pub const DOCS_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,8 +77,6 @@ pub struct Entry {
     /// The alternatives of a [`EntryKind::Choice`].
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
-    /// Part of the standard's core module (an `@core` line in its doc comment), not the framework.
-    pub core: bool,
 }
 
 impl Entry {
@@ -95,41 +93,86 @@ pub struct Group {
     pub entries: Vec<Entry>,
 }
 
+/// Which part of the reference a module is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Part {
+    /// The standard's core module: what a conforming host must know about (SPEC.md, clause 12).
+    Core,
+    /// The framework: a library a project vendors, never required of a host (SPEC.md, clause 13).
+    Framework,
+}
+
+/// One declarations file, parsed: the module's summary and its sections.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Declarations {
+    /// Prose from the top of the declarations file.
+    pub summary: String,
+    pub groups: Vec<Group>,
+}
+
+/// One module's reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleDocs {
+    /// How a source reaches it: `"syrinx"`, or the framework path relative to where a project
+    /// vendored it (`framework/dsp.js`).
+    pub module: String,
+    pub part: Part,
+    pub summary: String,
+    pub groups: Vec<Group>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Docs {
     pub schema: u32,
     /// What produced this file.
     pub generator: &'static str,
+    /// The implementation these docs came from.
+    pub version: &'static str,
     /// The source-contract version these docs describe (`meta.api`).
     pub api: u32,
     /// The oldest `meta.api` a host accepts; a source may declare anything from here to `api`.
     pub api_floor: u32,
     /// Frames per block of a stream, a constant of the standard.
     pub block_frames: usize,
-    /// The module specifier a source imports.
-    pub module: &'static str,
-    /// Prose from the top of the declarations file.
-    pub summary: String,
-    pub groups: Vec<Group>,
+    /// The core module first, then the framework's.
+    pub modules: Vec<ModuleDocs>,
 }
 
-/// Extracts the reference and verifies it against the prelude's real exports.
+/// Extracts the reference and verifies every module's declarations against its real exports.
 pub fn docs() -> Result<Docs, Error> {
-    let docs = parse(TYPES)?;
-    let declared: Vec<&str> = docs
-        .groups
-        .iter()
-        .flat_map(|g| g.entries.iter())
-        .filter(|e| e.is_value())
-        .map(|e| e.name.as_str())
-        .collect();
-    let actual = crate::host::prelude_exports()?;
+    let core = verified("syrinx", Part::Core, parse(TYPES)?, crate::host::prelude_exports()?)?;
+    let file = |path: &str| {
+        crate::framework::file(path).ok_or_else(|| Error::internal(format!("framework/{path} is not embedded")))
+    };
+    let dsp = verified(
+        "framework/dsp.js",
+        Part::Framework,
+        parse(file("dsp.d.ts")?)?,
+        crate::host::module_exports("framework/dsp.js", file("dsp.js")?)?,
+    )?;
+    Ok(Docs {
+        schema: DOCS_SCHEMA,
+        generator: "syrinx",
+        version: env!("CARGO_PKG_VERSION"),
+        api: PRELUDE_VERSION,
+        api_floor: API_FLOOR,
+        block_frames: BLOCK_FRAMES,
+        modules: vec![core, dsp],
+    })
+}
 
-    let missing: Vec<&str> = actual.iter().filter(|a| !declared.contains(&a.as_str())).map(String::as_str).collect();
-    let extra: Vec<&str> = declared.iter().filter(|d| !actual.iter().any(|a| a == *d)).copied().collect();
+/// The module's reference, once its declared values are exactly its exports.
+fn verified(module: &str, part: Part, declared: Declarations, actual: Vec<String>) -> Result<ModuleDocs, Error> {
+    let values: Vec<&str> =
+        declared.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.is_value()).map(|e| e.name.as_str()).collect();
+    let missing: Vec<&str> = actual.iter().filter(|a| !values.contains(&a.as_str())).map(String::as_str).collect();
+    let extra: Vec<&str> = values.iter().filter(|d| !actual.iter().any(|a| a == *d)).copied().collect();
     if !missing.is_empty() || !extra.is_empty() {
-        let mut message = String::from("the type declarations and the prelude disagree:");
+        let mut message = format!("the type declarations of {module} and the module disagree:");
         if !missing.is_empty() {
             message.push_str(&format!("\n  exported but undeclared: {}", missing.join(", ")));
         }
@@ -138,11 +181,11 @@ pub fn docs() -> Result<Docs, Error> {
         }
         return Err(Error::contract(message));
     }
-    Ok(docs)
+    Ok(ModuleDocs { module: module.to_string(), part, summary: declared.summary, groups: declared.groups })
 }
 
-/// Parses type declarations. Public for tests; [`docs`] is the entry point.
-pub fn parse(source: &str) -> Result<Docs, Error> {
+/// Parses one declarations file. Public for tests; [`docs`] is the entry point.
+pub fn parse(source: &str) -> Result<Declarations, Error> {
     let mut groups: Vec<Group> = Vec::new();
     let mut summary: Vec<String> = Vec::new();
     let mut doc = String::new();
@@ -166,6 +209,11 @@ pub fn parse(source: &str) -> Result<Docs, Error> {
             }
             continue;
         }
+        // A type-only import (the framework's declarations name the core's `Context`) declares
+        // nothing of its own.
+        if groups.is_empty() && line.starts_with("import type ") && line.ends_with(';') {
+            continue;
+        }
         if line.starts_with("/**") {
             doc = read_doc_comment(line, &mut lines, at)?;
             continue;
@@ -174,41 +222,20 @@ pub fn parse(source: &str) -> Result<Docs, Error> {
         let Some(group) = groups.last_mut() else {
             return Err(syntax(at, line, "a declaration before the first `// ---- Section` marker"));
         };
-        let (prose, core) = core_tag(std::mem::take(&mut doc));
-        let mut entry = read_entry(line, &mut lines, at, prose)?;
-        entry.core = core;
+        let entry = read_entry(line, &mut lines, at, std::mem::take(&mut doc))?;
         group.entries.push(entry);
     }
 
     if groups.is_empty() {
         return Err(Error::contract("type declarations contain no `// ---- Section` markers"));
     }
-    Ok(Docs {
-        schema: DOCS_SCHEMA,
-        generator: "syrinx",
-        api: PRELUDE_VERSION,
-        api_floor: crate::API_FLOOR,
-        block_frames: crate::BLOCK_FRAMES,
-        module: crate::PRELUDE_SPECIFIER,
-        summary: summary.join("\n").trim().to_string(),
-        groups,
-    })
+    Ok(Declarations { summary: summary.join("\n").trim().to_string(), groups })
 }
 
 type Lines<'a> = std::iter::Peekable<std::iter::Enumerate<std::str::Lines<'a>>>;
 
 fn syntax(line_no: usize, text: &str, what: &str) -> Error {
-    Error::contract(format!("syrinx.d.ts:{line_no}: cannot parse {what}: {text}"))
-}
-
-/// Splits an `@core` line out of a doc comment: the prose without it, and whether it was there.
-fn core_tag(doc: String) -> (String, bool) {
-    let core = doc.lines().any(|l| l.trim() == "@core");
-    if !core {
-        return (doc, false);
-    }
-    let prose: Vec<&str> = doc.lines().filter(|l| l.trim() != "@core").collect();
-    (prose.join("\n").trim().to_string(), true)
+    Error::contract(format!("declarations:{line_no}: cannot parse {what}: {text}"))
 }
 
 /// `// ---- Name` introduces a section.
@@ -282,7 +309,7 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
         // `export const Env: {` heads an object literal; the colon belongs to the block that
         // was just consumed, not to the declaration a reader sees.
         let signature = first.trim_end_matches('{').trim().trim_end_matches(':').trim().to_string();
-        return Ok(Entry { kind, name: name.to_string(), signature, doc, members, values: Vec::new(), core: false });
+        return Ok(Entry { kind, name: name.to_string(), signature, doc, members, values: Vec::new() });
     }
 
     // A single declaration, possibly wrapped over several lines until its semicolon.
@@ -298,10 +325,10 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
     let rest = signature.strip_prefix("export ").unwrap_or(&signature);
 
     if let Some(r) = rest.strip_prefix("function ") {
-        return Ok(Entry { kind: EntryKind::Function, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new(), core: false });
+        return Ok(Entry { kind: EntryKind::Function, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new() });
     }
     if let Some(r) = rest.strip_prefix("const ") {
-        return Ok(Entry { kind: EntryKind::Constant, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new(), core: false });
+        return Ok(Entry { kind: EntryKind::Constant, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new() });
     }
     if let Some(r) = rest.strip_prefix("type ") {
         let name = identifier(r).to_string();
@@ -314,7 +341,7 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
         } else {
             EntryKind::Alias
         };
-        return Ok(Entry { kind, name, signature, doc, members: Vec::new(), values, core: false });
+        return Ok(Entry { kind, name, signature, doc, members: Vec::new(), values });
     }
     Err(syntax(at, first, "a top-level declaration"))
 }
@@ -400,37 +427,34 @@ fn string_literals(body: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_the_shipped_declarations() {
-        let docs = parse(TYPES).unwrap();
-        assert_eq!(docs.schema, DOCS_SCHEMA);
-        assert_eq!(docs.module, "syrinx");
-        assert!(docs.summary.starts_with("The syrinx module"), "{}", docs.summary);
-        let names: Vec<&str> = docs.groups.iter().map(|g| g.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "The source contract",
-                "Scalars",
-                "Randomness",
-                "Oscillators",
-                "Noise",
-                "Envelopes",
-                "Filters",
-                "Delays and reverb",
-                "Buffers",
-            ]
-        );
+    fn dsp() -> Declarations {
+        parse(crate::framework::file("dsp.d.ts").unwrap()).unwrap()
     }
 
-    fn entry<'a>(docs: &'a Docs, name: &str) -> &'a Entry {
-        docs.groups.iter().flat_map(|g| g.entries.iter()).find(|e| e.name == name).expect(name)
+    fn entry<'a>(declarations: &'a Declarations, name: &str) -> &'a Entry {
+        declarations.groups.iter().flat_map(|g| g.entries.iter()).find(|e| e.name == name).expect(name)
+    }
+
+    #[test]
+    fn parses_the_shipped_declarations() {
+        let core = parse(TYPES).unwrap();
+        assert!(core.summary.starts_with("The syrinx module"), "{}", core.summary);
+        let names: Vec<&str> = core.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["The source contract", "Constants", "Seeds", "Randomness", "The block protocol"]);
+
+        let dsp = dsp();
+        assert!(dsp.summary.starts_with("The syrinx framework's dsp module"), "{}", dsp.summary);
+        let names: Vec<&str> = dsp.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Scalars", "Oscillators", "Noise", "Envelopes", "Filters", "Delays and reverb", "Buffers"]
+        );
     }
 
     #[test]
     fn reads_a_class_with_static_and_instance_members() {
-        let docs = parse(TYPES).unwrap();
-        let biquad = entry(&docs, "Biquad");
+        let dsp = dsp();
+        let biquad = entry(&dsp, "Biquad");
         assert_eq!(biquad.kind, EntryKind::Class);
         assert!(biquad.doc.starts_with("RBJ cookbook biquad"), "{}", biquad.doc);
         let ctor = &biquad.members[0];
@@ -446,8 +470,8 @@ mod tests {
 
     #[test]
     fn reads_properties_generics_and_object_literals() {
-        let docs = parse(TYPES).unwrap();
-        let osc = entry(&docs, "Osc");
+        let dsp = dsp();
+        let osc = entry(&dsp, "Osc");
         let width = osc.members.iter().find(|m| m.name == "width").unwrap();
         assert_eq!(width.kind, MemberKind::Property);
         // A property whose type is an object literal stays on one line.
@@ -455,7 +479,8 @@ mod tests {
         assert_eq!(shapes.kind, MemberKind::Property);
         assert!(shapes.is_static);
         assert!(shapes.signature.contains("{ sine: Shape"), "{}", shapes.signature);
-        let random = entry(&docs, "Random");
+        let core = parse(TYPES).unwrap();
+        let random = entry(&core, "Random");
         let pick = random.members.iter().find(|m| m.name == "pick").unwrap();
         assert_eq!(pick.kind, MemberKind::Method);
         assert_eq!(pick.signature, "pick<T>(array: readonly T[]): T");
@@ -463,32 +488,37 @@ mod tests {
 
     #[test]
     fn reads_functions_constants_interfaces_and_type_aliases() {
-        let docs = parse(TYPES).unwrap();
-        let db = entry(&docs, "db");
+        let dsp = dsp();
+        let db = entry(&dsp, "db");
         assert_eq!(db.kind, EntryKind::Function);
         assert_eq!(db.signature, "export function db(decibels: number): number");
         assert_eq!(db.doc, "Decibels to linear gain.");
 
-        assert_eq!(entry(&docs, "TAU").kind, EntryKind::Constant);
-        assert_eq!(entry(&docs, "Env").kind, EntryKind::Object);
-        assert_eq!(entry(&docs, "Env").signature, "export const Env");
-        assert_eq!(entry(&docs, "Env").members.len(), 7);
-        assert_eq!(entry(&docs, "Meta").kind, EntryKind::Interface);
-        assert_eq!(entry(&docs, "Envelope").kind, EntryKind::Callback);
-        assert_eq!(entry(&docs, "Output").kind, EntryKind::Alias);
+        assert_eq!(entry(&dsp, "TAU").kind, EntryKind::Constant);
+        assert_eq!(entry(&dsp, "Env").kind, EntryKind::Object);
+        assert_eq!(entry(&dsp, "Env").signature, "export const Env");
+        assert_eq!(entry(&dsp, "Env").members.len(), 7);
+        assert_eq!(entry(&dsp, "Envelope").kind, EntryKind::Callback);
+
+        let core = parse(TYPES).unwrap();
+        assert_eq!(entry(&core, "Meta").kind, EntryKind::Interface);
+        assert_eq!(entry(&core, "Output").kind, EntryKind::Alias);
+        assert_eq!(entry(&core, "inBlock").kind, EntryKind::Function);
 
         // A wrapped union of string literals becomes a choice with its alternatives.
-        let biquad_type = entry(&docs, "BiquadType");
+        let biquad_type = entry(&dsp, "BiquadType");
         assert_eq!(biquad_type.kind, EntryKind::Choice);
         assert_eq!(biquad_type.values, ["lowpass", "highpass", "bandpass", "notch", "allpass", "peak", "lowshelf", "highshelf"]);
     }
 
     #[test]
     fn every_declaration_lands_in_a_group() {
-        let docs = parse(TYPES).unwrap();
-        let entries: usize = docs.groups.iter().map(|g| g.entries.len()).sum();
-        // One per `export` in the declarations file.
-        assert_eq!(entries, TYPES.lines().filter(|l| l.starts_with("export ")).count());
+        for source in [TYPES, crate::framework::file("dsp.d.ts").unwrap()] {
+            let declarations = parse(source).unwrap();
+            let entries: usize = declarations.groups.iter().map(|g| g.entries.len()).sum();
+            // One per `export` in the declarations file.
+            assert_eq!(entries, source.lines().filter(|l| l.starts_with("export ")).count());
+        }
     }
 
     #[test]
@@ -499,15 +529,24 @@ mod tests {
         assert!(parse(orphan).unwrap_err().message.contains("before the first"));
         let unterminated = "// ---- X\nexport class A {\n  foo(): void;\n";
         assert!(parse(unterminated).unwrap_err().message.contains("closing brace"));
+        let late_import = "// ---- X\nimport type { A } from \"syrinx\";\n";
+        assert!(parse(late_import).unwrap_err().message.contains("cannot parse"), "an import inside a section is not skipped");
     }
 
     #[test]
-    fn declarations_match_the_prelude() {
+    fn declarations_match_the_modules() {
         // The real check: every runtime export documented, and nothing documented that is not
-        // exported. Fails when prelude.js and syrinx.d.ts drift apart.
+        // exported, in the core and in the framework. Fails when a module and its declarations
+        // drift apart.
         let docs = docs().unwrap();
-        let values: Vec<&str> = docs.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.is_value()).map(|e| e.name.as_str()).collect();
-        assert!(values.contains(&"Reverb"));
-        assert!(values.contains(&"normalize"));
+        assert_eq!(docs.modules.iter().map(|m| (m.module.as_str(), m.part)).collect::<Vec<_>>(), [
+            ("syrinx", Part::Core),
+            ("framework/dsp.js", Part::Framework)
+        ]);
+        let values = |m: &ModuleDocs| -> Vec<String> {
+            m.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.is_value()).map(|e| e.name.clone()).collect()
+        };
+        assert!(values(&docs.modules[0]).contains(&"inBlock".to_string()));
+        assert!(values(&docs.modules[1]).contains(&"normalize".to_string()));
     }
 }
