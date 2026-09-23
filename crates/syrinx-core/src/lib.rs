@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub use check::Diagnostic;
-pub use host::{Mixer, Source, Stem, Stream, PRELUDE_SPECIFIER};
+pub use host::{Mixer, PRELUDE_SPECIFIER, Source, Stem, Stream};
 #[doc(hidden)]
 pub use host::{prelude_exports, standard_block_frames};
 
@@ -268,6 +268,11 @@ pub fn render_each(source: &str, name: &str, opts: &RenderOptions, which: &[Stri
 
 /// Runs only the mix stage, over stems rendered earlier. `stems` are interleaved, as decoded from
 /// files. The geometry must match what the source declares.
-pub fn mix_from(source: &str, name: &str, opts: &RenderOptions, stems: &[(String, Vec<f32>)]) -> Result<Rendered, Error> {
+pub fn mix_from(
+    source: &str,
+    name: &str,
+    opts: &RenderOptions,
+    stems: &[(String, Vec<f32>)],
+) -> Result<Rendered, Error> {
     host::mix_from(source, name, opts, stems)
 }

@@ -2,9 +2,9 @@
 //! armed for the setup budget, then armed around every block of a stream and disarmed
 //! between blocks, so time a consumer spends not pulling is never charged to the source.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 

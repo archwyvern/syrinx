@@ -8,13 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::{Block, Error, ErrorKind, Meta, RenderOptions, Rendered, BLOCK_FRAMES};
+use crate::{BLOCK_FRAMES, Block, Error, ErrorKind, Meta, RenderOptions, Rendered};
 
 use super::wrapper::{
-    block_len, chop, check_finite_planes, deinterleave, drain, interleave, plane_arrays, planes_from, pull_block, read_stems,
-    run_entry, run_object,
+    block_len, check_finite_planes, chop, deinterleave, drain, interleave, plane_arrays, planes_from, pull_block,
+    read_stems, run_entry, run_object,
 };
-use super::{caught_in, geometry, get, with_source, Deadline};
+use super::{Deadline, caught_in, geometry, get, with_source};
 
 pub(super) enum MixSetup {
     Stream,
@@ -52,11 +52,16 @@ struct MixEntry<'s> {
     default: Option<v8::Local<'s, v8::Function>>,
 }
 
-fn mix_entry<'s>(scope: &mut v8::PinScope<'s, '_>, namespace: v8::Local<v8::Object>, use_default: bool) -> Result<MixEntry<'s>, Error> {
+fn mix_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    namespace: v8::Local<v8::Object>,
+    use_default: bool,
+) -> Result<MixEntry<'s>, Error> {
     let default = match (use_default, get(scope, namespace, "default")) {
-        (true, Some(value)) => {
-            Some(v8::Local::<v8::Function>::try_from(value).map_err(|_| Error::contract("the default export is not a function"))?)
-        }
+        (true, Some(value)) => Some(
+            v8::Local::<v8::Function>::try_from(value)
+                .map_err(|_| Error::contract("the default export is not a function"))?,
+        ),
         _ => None,
     };
     let run = run_object(scope)?;
@@ -114,9 +119,19 @@ pub(super) fn mix_what(use_default: bool) -> &'static str {
 }
 
 /// Checks whole layers handed to the mix stage: one per expected name, each `frames * channels`.
-pub(super) fn check_whole_layers(stems: &[Vec<f32>], names: &[String], frames: usize, channels: u32) -> Result<(), Error> {
+pub(super) fn check_whole_layers(
+    stems: &[Vec<f32>],
+    names: &[String],
+    frames: usize,
+    channels: u32,
+) -> Result<(), Error> {
     if stems.len() != names.len() {
-        return Err(Error::contract(format!("the mix stage expects {} layer(s) ({}), got {}", names.len(), names.join(", "), stems.len())));
+        return Err(Error::contract(format!(
+            "the mix stage expects {} layer(s) ({}), got {}",
+            names.len(),
+            names.join(", "),
+            stems.len()
+        )));
     }
     for (name, samples) in names.iter().zip(stems) {
         if samples.len() != frames * channels as usize {
@@ -183,89 +198,127 @@ pub(super) fn mixer_thread(
     inbox: Receiver<MixCommand>,
 ) {
     let what = mix_what(use_default);
-    let probed = with_source(text, name, opts, deadline.remaining(), |scope, _name, meta, dependencies, namespace, guard| {
-        *current.lock().unwrap() = Some(guard.handle.clone());
-        let (sample_rate, frames) = geometry(&meta, opts)?;
-        let channels = meta.channels;
-        let stem_names: Vec<String> = read_stems(scope, namespace)?.into_iter().map(|(n, _)| n).collect();
-        let mix = mix_entry(scope, namespace, use_default)?;
-        let result = call_mix(scope, &mix, &meta, sample_rate, frames, &names, None, 0)?;
-        let found = |form| Probed { form, meta: meta.clone(), sample_rate, dependencies: dependencies.clone(), stem_names: stem_names.clone() };
-        if result.is_null() {
-            return Ok(found(MixForm::Whole));
-        }
-        let Ok(mut driver) = v8::Local::<v8::Function>::try_from(result) else {
-            let planes = planes_from(scope, result, frames, channels)?;
-            check_finite_planes(&planes, 0, what)?;
-            return Ok(found(MixForm::Planes(planes)));
-        };
-        guard.watchdog.disarm();
-        if setup.send(MixSetup::Stream).is_err() {
-            return Ok(found(MixForm::Stream));
-        }
-        while let Ok(command) = inbox.recv() {
-            match command {
-                MixCommand::Restart { from, reply } => {
-                    let outcome = call_mix(scope, &mix, &meta, sample_rate, frames, &names, None, from).and_then(|r| {
+    let probed = with_source(
+        text,
+        name,
+        opts,
+        deadline.remaining(),
+        |scope, _name, meta, dependencies, namespace, guard| {
+            *current.lock().unwrap() = Some(guard.handle.clone());
+            let (sample_rate, frames) = geometry(&meta, opts)?;
+            let channels = meta.channels;
+            let stem_names: Vec<String> = read_stems(scope, namespace)?.into_iter().map(|(n, _)| n).collect();
+            let mix = mix_entry(scope, namespace, use_default)?;
+            let result = call_mix(scope, &mix, &meta, sample_rate, frames, &names, None, 0)?;
+            let found = |form| Probed {
+                form,
+                meta: meta.clone(),
+                sample_rate,
+                dependencies: dependencies.clone(),
+                stem_names: stem_names.clone(),
+            };
+            if result.is_null() {
+                return Ok(found(MixForm::Whole));
+            }
+            let Ok(mut driver) = v8::Local::<v8::Function>::try_from(result) else {
+                let planes = planes_from(scope, result, frames, channels)?;
+                check_finite_planes(&planes, 0, what)?;
+                return Ok(found(MixForm::Planes(planes)));
+            };
+            guard.watchdog.disarm();
+            if setup.send(MixSetup::Stream).is_err() {
+                return Ok(found(MixForm::Stream));
+            }
+            while let Ok(command) = inbox.recv() {
+                match command {
+                    MixCommand::Restart { from, reply } => {
+                        let outcome = call_mix(scope, &mix, &meta, sample_rate, frames, &names, None, from).and_then(|r| {
                         v8::Local::<v8::Function>::try_from(r).map_err(|_| {
                             Error::contract("the default export did not return a stream on restart, having returned one before")
                         })
                     });
-                    let _ = reply.send(outcome.map(|d| driver = d));
-                }
-                MixCommand::Mix { offset, stems, reply } => {
-                    let outcome = (|| {
-                        if offset >= frames {
-                            return Err(Error::contract(format!("block at frame {offset} is past the end ({frames} frames)")));
-                        }
-                        let n = block_len(offset, frames);
-                        if stems.len() != names.len() {
-                            return Err(Error::contract(format!(
-                                "the mix stage expects {} layer(s) ({}), got {}",
-                                names.len(),
-                                names.join(", "),
-                                stems.len()
-                            )));
-                        }
-                        for (stem, samples) in names.iter().zip(&stems) {
-                            if samples.len() != n * channels as usize {
+                        let _ = reply.send(outcome.map(|d| driver = d));
+                    }
+                    MixCommand::Mix { offset, stems, reply } => {
+                        let outcome = (|| {
+                            if offset >= frames {
                                 return Err(Error::contract(format!(
-                                    "stem \"{stem}\" has {} samples for the block at frame {offset}, expected {} ({n} frames x {channels} channels)",
-                                    samples.len(),
-                                    n * channels as usize
+                                    "block at frame {offset} is past the end ({frames} frames)"
                                 )));
                             }
-                        }
-                        let blocks: Vec<Vec<Vec<f32>>> = stems.iter().map(|s| deinterleave(s, n, channels)).collect();
-                        pull_block(scope, guard, opts.timeout, driver, offset, frames, channels, Some(&blocks), what)
-                    })();
-                    let _ = reply.send(outcome);
-                }
-                MixCommand::MixAll { stems, budget, reply } => {
-                    let outcome = (|| {
-                        check_whole_layers(&stems, &names, frames, channels)?;
-                        driver = v8::Local::<v8::Function>::try_from(call_mix(scope, &mix, &meta, sample_rate, frames, &names, None, 0)?)
-                        .map_err(|_| Error::contract("the default export did not return a stream on restart, having returned one before"))?;
-                        let layers: Vec<&[f32]> = stems.iter().map(Vec::as_slice).collect();
-                        let blocks_at = |offset: usize| chop(&layers, offset, frames, channels);
-                        let planes = drain(scope, guard, budget, driver, frames, channels, Some(&blocks_at), what)?;
-                        Ok(Rendered {
-                            meta: meta.clone(),
-                            sample_rate,
-                            channels,
-                            frames,
-                            samples: interleave(&planes, frames, channels),
-                            dependencies: dependencies.clone(),
-                            stem: None,
-                            stem_names: stem_names.clone(),
-                        })
-                    })();
-                    let _ = reply.send(outcome);
+                            let n = block_len(offset, frames);
+                            if stems.len() != names.len() {
+                                return Err(Error::contract(format!(
+                                    "the mix stage expects {} layer(s) ({}), got {}",
+                                    names.len(),
+                                    names.join(", "),
+                                    stems.len()
+                                )));
+                            }
+                            for (stem, samples) in names.iter().zip(&stems) {
+                                if samples.len() != n * channels as usize {
+                                    return Err(Error::contract(format!(
+                                        "stem \"{stem}\" has {} samples for the block at frame {offset}, expected {} ({n} frames x {channels} channels)",
+                                        samples.len(),
+                                        n * channels as usize
+                                    )));
+                                }
+                            }
+                            let blocks: Vec<Vec<Vec<f32>>> =
+                                stems.iter().map(|s| deinterleave(s, n, channels)).collect();
+                            pull_block(
+                                scope,
+                                guard,
+                                opts.timeout,
+                                driver,
+                                offset,
+                                frames,
+                                channels,
+                                Some(&blocks),
+                                what,
+                            )
+                        })();
+                        let _ = reply.send(outcome);
+                    }
+                    MixCommand::MixAll { stems, budget, reply } => {
+                        let outcome = (|| {
+                            check_whole_layers(&stems, &names, frames, channels)?;
+                            driver = v8::Local::<v8::Function>::try_from(call_mix(
+                                scope,
+                                &mix,
+                                &meta,
+                                sample_rate,
+                                frames,
+                                &names,
+                                None,
+                                0,
+                            )?)
+                            .map_err(|_| {
+                                Error::contract(
+                                    "the default export did not return a stream on restart, having returned one before",
+                                )
+                            })?;
+                            let layers: Vec<&[f32]> = stems.iter().map(Vec::as_slice).collect();
+                            let blocks_at = |offset: usize| chop(&layers, offset, frames, channels);
+                            let planes = drain(scope, guard, budget, driver, frames, channels, Some(&blocks_at), what)?;
+                            Ok(Rendered {
+                                meta: meta.clone(),
+                                sample_rate,
+                                channels,
+                                frames,
+                                samples: interleave(&planes, frames, channels),
+                                dependencies: dependencies.clone(),
+                                stem: None,
+                                stem_names: stem_names.clone(),
+                            })
+                        })();
+                        let _ = reply.send(outcome);
+                    }
                 }
             }
-        }
-        Ok(found(MixForm::Stream))
-    });
+            Ok(found(MixForm::Stream))
+        },
+    );
     *current.lock().unwrap() = None;
 
     let probed = match probed {

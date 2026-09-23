@@ -10,8 +10,8 @@
 //! `syrinx_stream_next` until it returns null, each block a `SyrinxRender` of its own. A stream
 //! is used from one thread at a time; freeing it stops whatever is still computing.
 
-use std::ffi::{c_char, CStr, CString};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ffi::{CStr, CString, c_char};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -175,13 +175,18 @@ impl SyrinxRender {
 
 /// # Safety
 /// `source` must point to `source_len` readable bytes; `name` must be null or NUL-terminated.
-unsafe fn read_inputs<'a>(source: *const u8, source_len: usize, name: *const c_char) -> Result<(&'a str, String), Box<SyrinxRender>> {
+unsafe fn read_inputs<'a>(
+    source: *const u8,
+    source_len: usize,
+    name: *const c_char,
+) -> Result<(&'a str, String), Box<SyrinxRender>> {
     if source.is_null() {
         return Err(Box::new(SyrinxRender::failure(KIND_INTERNAL, "source is null", None, None)));
     }
     let bytes = unsafe { std::slice::from_raw_parts(source, source_len) };
-    let source = std::str::from_utf8(bytes)
-        .map_err(|e| Box::new(SyrinxRender::failure(KIND_INTERNAL, &format!("source is not UTF-8: {e}"), None, None)))?;
+    let source = std::str::from_utf8(bytes).map_err(|e| {
+        Box::new(SyrinxRender::failure(KIND_INTERNAL, &format!("source is not UTF-8: {e}"), None, None))
+    })?;
     let name = if name.is_null() {
         "source.js".to_string()
     } else {
@@ -283,7 +288,12 @@ pub unsafe extern "C" fn syrinx_render(
 /// # Safety
 /// As for [`syrinx_render`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn syrinx_inspect(source: *const u8, source_len: usize, name: *const c_char, root: *const c_char) -> *mut SyrinxRender {
+pub unsafe extern "C" fn syrinx_inspect(
+    source: *const u8,
+    source_len: usize,
+    name: *const c_char,
+    root: *const c_char,
+) -> *mut SyrinxRender {
     guarded(|| {
         let (source, name) = match unsafe { read_inputs(source, source_len, name) } {
             Ok(v) => v,
@@ -336,13 +346,23 @@ pub unsafe extern "C" fn syrinx_stream_open(
             target,
         };
         match Stream::open(source, &name, &opts) {
-            Ok(s) => SyrinxStream { info: SyrinxRender::from_source(s.source()), streaming: s.streaming(), stream: Some(s) },
+            Ok(s) => {
+                SyrinxStream { info: SyrinxRender::from_source(s.source()), streaming: s.streaming(), stream: Some(s) }
+            }
             Err(e) => SyrinxStream { info: SyrinxRender::from_error(&e), streaming: false, stream: None },
         }
     }))
     .unwrap_or_else(|p| {
-        let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
-        SyrinxStream { info: SyrinxRender::failure(KIND_INTERNAL, &format!("internal panic: {msg}"), None, None), streaming: false, stream: None }
+        let msg = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into());
+        SyrinxStream {
+            info: SyrinxRender::failure(KIND_INTERNAL, &format!("internal panic: {msg}"), None, None),
+            streaming: false,
+            stream: None,
+        }
     });
     Box::into_raw(Box::new(result))
 }
@@ -392,7 +412,11 @@ pub unsafe extern "C" fn syrinx_stream_next(s: *mut SyrinxStream) -> *mut Syrinx
         Ok(Ok(None)) => return std::ptr::null_mut(),
         Ok(Err(e)) => SyrinxRender::from_error(&e),
         Err(p) => {
-            let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
             SyrinxRender::failure(KIND_INTERNAL, &format!("internal panic: {msg}"), None, None)
         }
     };
@@ -437,8 +461,16 @@ macro_rules! accessor {
 
 accessor!(syrinx_render_ok, bool, false, |r| r.ok);
 accessor!(syrinx_render_error_kind, i32, KIND_INTERNAL, |r| r.kind);
-accessor!(syrinx_render_error, *const c_char, std::ptr::null(), |r| if r.ok { std::ptr::null() } else { r.message.as_ptr() });
-accessor!(syrinx_render_error_file, *const c_char, std::ptr::null(), |r| if r.ok || r.file.as_bytes().is_empty() { std::ptr::null() } else { r.file.as_ptr() });
+accessor!(syrinx_render_error, *const c_char, std::ptr::null(), |r| if r.ok {
+    std::ptr::null()
+} else {
+    r.message.as_ptr()
+});
+accessor!(syrinx_render_error_file, *const c_char, std::ptr::null(), |r| if r.ok || r.file.as_bytes().is_empty() {
+    std::ptr::null()
+} else {
+    r.file.as_ptr()
+});
 accessor!(syrinx_render_error_line, i32, 0, |r| r.line);
 accessor!(syrinx_render_error_column, i32, 0, |r| r.column);
 accessor!(syrinx_render_name, *const c_char, std::ptr::null(), |r| match (&r.name, r.ok) {
@@ -454,7 +486,11 @@ accessor!(syrinx_render_frames, u32, 0, |r| r.frames);
 accessor!(syrinx_render_offset, u64, 0, |r| r.offset);
 accessor!(syrinx_render_dependency_count, u32, 0, |r| r.dependencies.len() as u32);
 accessor!(syrinx_render_stem_count, u32, 0, |r| r.stems.len() as u32);
-accessor!(syrinx_render_samples, *const f32, std::ptr::null(), |r| if r.samples.is_empty() { std::ptr::null() } else { r.samples.as_ptr() });
+accessor!(syrinx_render_samples, *const f32, std::ptr::null(), |r| if r.samples.is_empty() {
+    std::ptr::null()
+} else {
+    r.samples.as_ptr()
+});
 
 /// The `i`th imported file (canonical path), or null when out of range. Owned by `r`.
 ///
@@ -531,7 +567,9 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         assert_eq!(text(unsafe { syrinx_render_stem_name(rendered, 1) }), "body");
         assert!(unsafe { syrinx_render_stem_name(rendered, 2) }.is_null());
 
-        let stream = unsafe { syrinx_stream_open(CLICK.as_ptr(), CLICK.len(), name.as_ptr(), std::ptr::null(), 0, 0, std::ptr::null()) };
+        let stream = unsafe {
+            syrinx_stream_open(CLICK.as_ptr(), CLICK.len(), name.as_ptr(), std::ptr::null(), 0, 0, std::ptr::null())
+        };
         let info = unsafe { syrinx_stream_info(stream) };
         assert!(unsafe { syrinx_render_ok(info) });
         assert_eq!(unsafe { syrinx_render_frames(info) } as usize, frames);
@@ -563,7 +601,9 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
     fn a_subset_and_a_bad_source_report_through_info() {
         let name = click("subset");
         let subset = CString::new("body").unwrap();
-        let stream = unsafe { syrinx_stream_open(CLICK.as_ptr(), CLICK.len(), name.as_ptr(), std::ptr::null(), 0, 0, subset.as_ptr()) };
+        let stream = unsafe {
+            syrinx_stream_open(CLICK.as_ptr(), CLICK.len(), name.as_ptr(), std::ptr::null(), 0, 0, subset.as_ptr())
+        };
         assert!(unsafe { syrinx_render_ok(syrinx_stream_info(stream)) });
         assert!(!unsafe { syrinx_stream_streaming(stream) }, "one whole layer and no mix stage");
         let block = unsafe { syrinx_stream_next(stream) };
@@ -572,8 +612,11 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         unsafe { syrinx_render_free(block) };
         unsafe { syrinx_stream_free(stream) };
 
-        let bad = "export const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => Math.random() };";
-        let stream = unsafe { syrinx_stream_open(bad.as_ptr(), bad.len(), name.as_ptr(), std::ptr::null(), 0, 0, std::ptr::null()) };
+        let bad =
+            "export const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => Math.random() };";
+        let stream = unsafe {
+            syrinx_stream_open(bad.as_ptr(), bad.len(), name.as_ptr(), std::ptr::null(), 0, 0, std::ptr::null())
+        };
         let info = unsafe { syrinx_stream_info(stream) };
         assert!(!unsafe { syrinx_render_ok(info) });
         assert_eq!(unsafe { syrinx_render_error_kind(info) }, KIND_CHECK);

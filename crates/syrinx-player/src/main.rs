@@ -25,7 +25,11 @@ use clap::Parser;
 use crate::instance::{Acquire, Request};
 
 #[derive(Parser)]
-#[command(name = "syrinx-player", version, about = "Plays syrinx sound sources: a playlist, a fader per layer, rendering as you listen.")]
+#[command(
+    name = "syrinx-player",
+    version,
+    about = "Plays syrinx sound sources: a playlist, a fader per layer, rendering as you listen."
+)]
 struct Cli {
     /// Windows: associate .syr with this executable for the current user, then exit.
     #[arg(long)]
@@ -71,7 +75,13 @@ fn run() -> Result<()> {
     let paths: Vec<PathBuf> = cli
         .paths
         .iter()
-        .map(|p| if p.is_absolute() { p.clone() } else { std::env::current_dir().map(|d| d.join(p)).unwrap_or_else(|_| p.clone()) })
+        .map(|p| {
+            if p.is_absolute() {
+                p.clone()
+            } else {
+                std::env::current_dir().map(|d| d.join(p)).unwrap_or_else(|_| p.clone())
+            }
+        })
         .collect();
     // A screenshot run is its own process, never handed to a running player.
     let suffix = match &cli.instance {
@@ -79,7 +89,8 @@ fn run() -> Result<()> {
         None if cli.screenshot.is_some() => format!("-shot-{}", std::process::id()),
         None => String::new(),
     };
-    let (rx, ctx_slot) = match instance::acquire(&suffix, Request { replace: !paths.is_empty(), paths: paths.clone() }) {
+    let (rx, ctx_slot) = match instance::acquire(&suffix, Request { replace: !paths.is_empty(), paths: paths.clone() })
+    {
         Acquire::Handled => return Ok(()),
         Acquire::Listening(rx, slot) => (rx, slot),
     };
@@ -89,7 +100,8 @@ fn run() -> Result<()> {
         eprintln!("warning: trimming the render cache: {e:#}");
     }
 
-    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../logo/syrinx-512.png")).context("decoding the window icon")?;
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../logo/syrinx-512.png"))
+        .context("decoding the window icon")?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("syrinx-player")

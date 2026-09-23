@@ -45,11 +45,7 @@ pub fn check(source: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for (name, why) in BANNED {
         for (line, column) in find_identifier(&stripped, name) {
-            out.push(Diagnostic {
-                line,
-                column,
-                message: format!("`{name}` is not allowed in a sound source: {why}"),
-            });
+            out.push(Diagnostic { line, column, message: format!("`{name}` is not allowed in a sound source: {why}") });
         }
     }
     for (line, column) in find_exponent(&stripped) {

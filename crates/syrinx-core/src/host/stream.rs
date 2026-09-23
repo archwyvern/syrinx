@@ -3,11 +3,11 @@
 
 use crate::{Block, Error, RenderOptions};
 
+use super::Deadline;
 use super::mixer::Mixer;
-use super::source::{plan, Source};
+use super::source::{Source, plan};
 use super::stem::Stem;
 use super::wrapper::block_len;
-use super::Deadline;
 
 /// A [`Source`], its layers and its mix stage composed: pre-mixed blocks, in order. What
 /// `render` drains and the C ABI wraps. Dropping it stops every isolate and joins every thread.
@@ -36,7 +36,8 @@ impl Stream {
         // One layer and nothing to combine it with: the sum of one buffer is that buffer, and
         // there is no arithmetic to get wrong. This keeps a sound effect at exactly one isolate
         // beyond the inspection.
-        let mut mixer = if selected.len() == 1 && !use_default { None } else { Some(source.mixer_with(&opts.target, deadline)?) };
+        let mut mixer =
+            if selected.len() == 1 && !use_default { None } else { Some(source.mixer_with(&opts.target, deadline)?) };
         let any_live = stems.iter().any(Stem::streaming);
         let mix_streams = mixer.as_ref().is_none_or(Mixer::streaming);
         let whole = match mixer.as_mut() {
@@ -95,7 +96,7 @@ impl Stream {
                         "layer \"{}\" produced the block at frame {} when frame {offset} was due",
                         stem.name(),
                         block.offset
-                    )))
+                    )));
                 }
                 None => return Err(Error::internal(format!("layer \"{}\" ended at frame {offset}", stem.name()))),
             }

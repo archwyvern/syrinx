@@ -7,13 +7,13 @@ use std::time::{Duration, Instant};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
-use syrinx_core::wav::Format;
-use syrinx_core::{Error, ErrorKind, RenderOptions, Rendered, Target};
 #[cfg(not(windows))]
 use syrinx_core::Stream;
+use syrinx_core::wav::Format;
+use syrinx_core::{Error, ErrorKind, RenderOptions, Rendered, Target};
 use syrinx_encode::Options as EncodeOptions;
 
 #[derive(Parser)]
@@ -376,7 +376,11 @@ fn run() -> Result<()> {
             }
             let (rendered, took) = compile(&input, &render.options())?;
             report(&input, &rendered, Some(took), Path::new("(player)"), None);
-            let tmp = std::env::temp_dir().join(format!("syrinx-{}-{}.wav", std::process::id(), display_name(&rendered.meta, &input)));
+            let tmp = std::env::temp_dir().join(format!(
+                "syrinx-{}-{}.wav",
+                std::process::id(),
+                display_name(&rendered.meta, &input)
+            ));
             syrinx_core::wav::write(&tmp, &rendered, Format::Wav16).context("writing temp wav")?;
             let result = (0..repeat.max(1)).try_for_each(|_| play(&tmp, player.as_deref()));
             let _ = std::fs::remove_file(&tmp);
@@ -479,7 +483,13 @@ fn run() -> Result<()> {
             } else {
                 println!("{}  vs  {}", candidate.display(), reference.display());
                 for a in &cmp.axes {
-                    let mark = if a.skipped { "-" } else if a.ok { "ok" } else { "!!" };
+                    let mark = if a.skipped {
+                        "-"
+                    } else if a.ok {
+                        "ok"
+                    } else {
+                        "!!"
+                    };
                     println!("  {mark:<3} {:<21} {:>7} {:<7} {}", a.axis, a.value, a.unit, a.note);
                 }
                 println!("  score {:.2}  {}", cmp.score, cmp.summary);
@@ -624,7 +634,13 @@ fn print_features(path: &Path, f: &syrinx_core::analyze::Features) {
     );
     println!(
         "  centroid {} Hz (start {} / mid {} / end {})  rolloff {} Hz  tilt {} dB/oct  flatness {}",
-        f.centroid_hz, f.brightness.start_hz, f.brightness.mid_hz, f.brightness.end_hz, f.rolloff_hz, f.tilt_db_per_oct, f.flatness
+        f.centroid_hz,
+        f.brightness.start_hz,
+        f.brightness.mid_hz,
+        f.brightness.end_hz,
+        f.rolloff_hz,
+        f.tilt_db_per_oct,
+        f.flatness
     );
     match f.f0_hz {
         Some(hz) => println!("  pitch {hz} Hz (clarity {})", f.f0_clarity),
@@ -636,7 +652,8 @@ fn print_features(path: &Path, f: &syrinx_core::analyze::Features) {
     println!("  partials  {}", if partials.is_empty() { "none".into() } else { partials.join("  ") });
     let onsets: Vec<String> = f.onsets.iter().map(|o| format!("{o}")).collect();
     println!("  onsets  {}", onsets.join(" "));
-    let env: String = f.envelope.iter().map(|v| " .:-=+*#%@".chars().nth(((v * 9.0).round() as usize).min(9)).unwrap()).collect();
+    let env: String =
+        f.envelope.iter().map(|v| " .:-=+*#%@".chars().nth(((v * 9.0).round() as usize).min(9)).unwrap()).collect();
     println!("  envelope  |{env}|");
 }
 
@@ -744,12 +761,7 @@ fn bounce_stems(inputs: &[PathBuf], dir: &Path, opts: &RenderOptions, quiet: boo
     std::fs::write(&path, serde_json::to_string_pretty(&manifest)? + "\n")
         .with_context(|| format!("writing {}", path.display()))?;
     if !quiet {
-        eprintln!(
-            "{} layer(s) bounced in {:.0} ms -> {}",
-            stems.len(),
-            elapsed.as_secs_f64() * 1000.0,
-            dir.display()
-        );
+        eprintln!("{} layer(s) bounced in {:.0} ms -> {}", stems.len(), elapsed.as_secs_f64() * 1000.0, dir.display());
     }
     Ok(())
 }
@@ -815,7 +827,8 @@ fn mix_from_bounce(
 fn compile(input: &Path, opts: &RenderOptions) -> Result<(Rendered, Duration)> {
     let source = std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
     let started = Instant::now();
-    let rendered = syrinx_core::render(&source, &input.to_string_lossy(), opts).map_err(|e| anyhow!("{}", describe(input, &e)))?;
+    let rendered =
+        syrinx_core::render(&source, &input.to_string_lossy(), opts).map_err(|e| anyhow!("{}", describe(input, &e)))?;
     Ok((rendered, started.elapsed()))
 }
 
@@ -828,12 +841,14 @@ fn hashes_of(input: &Path, opts: &RenderOptions) -> Result<Vec<(Option<String>, 
         Target::Mix => Vec::new(),
         Target::Stems(names) => names.clone(),
     };
-    let stems = syrinx_core::render_each(&source, &name, opts, &selected).map_err(|e| anyhow!("{}", describe(input, &e)))?;
+    let stems =
+        syrinx_core::render_each(&source, &name, opts, &selected).map_err(|e| anyhow!("{}", describe(input, &e)))?;
     let mut out = Vec::with_capacity(stems.len() + 1);
     if selected.is_empty() {
         let supplied: Vec<(String, Vec<f32>)> =
             stems.iter().map(|r| (r.stem.clone().unwrap_or_default(), r.samples.clone())).collect();
-        let mixed = syrinx_core::mix_from(&source, &name, opts, &supplied).map_err(|e| anyhow!("{}", describe(input, &e)))?;
+        let mixed =
+            syrinx_core::mix_from(&source, &name, opts, &supplied).map_err(|e| anyhow!("{}", describe(input, &e)))?;
         out.push((None, hash_of(&mixed)));
     }
     for r in &stems {
@@ -853,11 +868,8 @@ fn describe(input: &Path, e: &Error) -> String {
     };
     let file = e.file.clone().unwrap_or_else(|| input.display().to_string());
     if e.diagnostics.len() > 1 {
-        let lines: Vec<String> = e
-            .diagnostics
-            .iter()
-            .map(|d| format!("{file}:{}:{}: {}", d.line, d.column, d.message))
-            .collect();
+        let lines: Vec<String> =
+            e.diagnostics.iter().map(|d| format!("{file}:{}:{}: {}", d.line, d.column, d.message)).collect();
         return format!("{kind}\n{}", lines.join("\n"));
     }
     match (e.line, e.column) {
@@ -874,9 +886,9 @@ fn dbfs(x: f32) -> String {
 /// What to call a sound in output: its declared name, else its file's stem. The contract gives a
 /// name no default (SPEC.md, clause 3); choosing a label is this tool's business.
 fn display_name(meta: &syrinx_core::Meta, source: &Path) -> String {
-    meta.name.clone().unwrap_or_else(|| {
-        source.file_stem().map_or_else(|| "sound".to_string(), |s| s.to_string_lossy().into_owned())
-    })
+    meta.name
+        .clone()
+        .unwrap_or_else(|| source.file_stem().map_or_else(|| "sound".to_string(), |s| s.to_string_lossy().into_owned()))
 }
 
 fn report(source: &Path, r: &Rendered, took: Option<Duration>, output: &Path, encoded_as: Option<&str>) {
@@ -917,8 +929,10 @@ fn stream_to_player(input: &Path, opts: &RenderOptions) -> Result<()> {
 
     let source = std::fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
     let started = Instant::now();
-    let mut stream = Stream::open(&source, &input.to_string_lossy(), opts).map_err(|e| anyhow!("{}", describe(input, &e)))?;
-    let (rate, channels, frames) = (stream.source().sample_rate(), stream.source().channels(), stream.source().frames());
+    let mut stream =
+        Stream::open(&source, &input.to_string_lossy(), opts).map_err(|e| anyhow!("{}", describe(input, &e)))?;
+    let (rate, channels, frames) =
+        (stream.source().sample_rate(), stream.source().channels(), stream.source().frames());
     eprintln!(
         "{}  {:.3}s  {} Hz  {}ch  {} in {:.0} ms  -> (player)",
         display_name(stream.source().meta(), input),
@@ -935,7 +949,21 @@ fn stream_to_player(input: &Path, opts: &RenderOptions) -> Result<()> {
         &["pw-play", "--raw", "--format=f32", &format!("--rate={rate_s}"), &format!("--channels={ch_s}"), "-"],
         &["paplay", "--raw", "--format=float32le", &format!("--rate={rate_s}"), &format!("--channels={ch_s}")],
         &["aplay", "-q", "-t", "raw", "-f", "FLOAT_LE", "-r", &rate_s, "-c", &ch_s, "-"],
-        &["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-f", "f32le", "-ar", &rate_s, "-ac", &ch_s, "-i", "-"],
+        &[
+            "ffplay",
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "error",
+            "-f",
+            "f32le",
+            "-ar",
+            &rate_s,
+            "-ac",
+            &ch_s,
+            "-i",
+            "-",
+        ],
     ];
     let mut child = None;
     for argv in candidates {
@@ -1014,7 +1042,8 @@ fn play(wav: &Path, player: Option<&str>) -> Result<()> {
     if let Some(p) = player {
         let mut parts = p.split_whitespace();
         let cmd = parts.next().ok_or_else(|| anyhow!("empty player command"))?;
-        let status = std::process::Command::new(cmd).args(parts).arg(wav).status().with_context(|| format!("running {cmd}"))?;
+        let status =
+            std::process::Command::new(cmd).args(parts).arg(wav).status().with_context(|| format!("running {cmd}"))?;
         if !status.success() {
             bail!("{cmd} exited with {status}");
         }

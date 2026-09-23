@@ -417,14 +417,19 @@ pub fn features(s: &Signal) -> Features {
 
     let max_mag = st.avg_mag.iter().cloned().fold(1e-9, f64::max);
     let mut found: Vec<(usize, f64)> = (2..BINS - 1)
-        .filter(|&b| st.avg_mag[b] > st.avg_mag[b - 1] && st.avg_mag[b] >= st.avg_mag[b + 1] && st.avg_mag[b] > max_mag * 0.05)
+        .filter(|&b| {
+            st.avg_mag[b] > st.avg_mag[b - 1] && st.avg_mag[b] >= st.avg_mag[b + 1] && st.avg_mag[b] > max_mag * 0.05
+        })
         .map(|b| (b, st.avg_mag[b]))
         .collect();
     found.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     let partials: Vec<Partial> = found
         .iter()
         .take(6)
-        .map(|&(bin, mag)| Partial { hz: (bin as f64 * sr / FFT_SIZE as f64).round() as u32, db: round(20.0 * (mag / max_mag).log10(), 1) })
+        .map(|&(bin, mag)| Partial {
+            hz: (bin as f64 * sr / FFT_SIZE as f64).round() as u32,
+            db: round(20.0 * (mag / max_mag).log10(), 1),
+        })
         .collect();
 
     let pitch = if flatness < 0.4 { loudest_window(&mono, n, sr).and_then(|w| pitch_autocorr(&w, sr)) } else { None };
@@ -527,7 +532,14 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
     let r2 = |x: f64| round(x, 2);
     let mut axes = Vec::new();
     let axis = |axis, value, unit, ok, note: String| Axis { axis, value, unit, ok, note, skipped: false };
-    let skipped = |axis, unit| Axis { axis, value: 0.0, unit, ok: true, note: "reference degenerate; skipped".into(), skipped: true };
+    let skipped = |axis, unit| Axis {
+        axis,
+        value: 0.0,
+        unit,
+        ok: true,
+        note: "reference degenerate; skipped".into(),
+        skipped: true,
+    };
 
     let corr = pearson(&candidate.envelope, &reference.envelope);
     axes.push(axis(
@@ -535,7 +547,11 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
         r2(corr),
         "corr",
         corr >= 0.75,
-        if corr >= 0.75 { "envelope shape matches".into() } else { format!("envelope shape diverges (corr {})", r2(corr)) },
+        if corr >= 0.75 {
+            "envelope shape matches".into()
+        } else {
+            format!("envelope shape diverges (corr {})", r2(corr))
+        },
     ));
 
     if reference.centroid_hz < 20.0 {
@@ -548,7 +564,11 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
             r2(oct),
             "oct",
             ok,
-            if ok { "brightness matches".into() } else { format!("centroid {} oct too {}", r2(oct.abs()), if oct > 0.0 { "bright" } else { "dark" }) },
+            if ok {
+                "brightness matches".into()
+            } else {
+                format!("centroid {} oct too {}", r2(oct.abs()), if oct > 0.0 { "bright" } else { "dark" })
+            },
         ));
     }
 
@@ -569,7 +589,11 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
                 r2(mean),
                 "oct",
                 ok,
-                if ok { "brightness motion matches".into() } else { format!("brightness trajectory off by {} oct on average", r2(mean)) },
+                if ok {
+                    "brightness motion matches".into()
+                } else {
+                    format!("brightness trajectory off by {} oct on average", r2(mean))
+                },
             ));
         }
     }
@@ -584,7 +608,11 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
             r2(oct),
             "oct",
             ok,
-            if ok { "attack speed matches".into() } else { format!("attack {}x too {}", r1(2f64.powf(oct.abs())), if oct > 0.0 { "slow" } else { "fast" }) },
+            if ok {
+                "attack speed matches".into()
+            } else {
+                format!("attack {}x too {}", r1(2f64.powf(oct.abs())), if oct > 0.0 { "slow" } else { "fast" })
+            },
         ));
     }
 
@@ -598,14 +626,28 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
             r2(oct),
             "oct",
             ok,
-            if ok { "tail length matches".into() } else { format!("decay {:.1}x too {}", r1(2f64.powf(oct.abs())), if oct > 0.0 { "long" } else { "short" }) },
+            if ok {
+                "tail length matches".into()
+            } else {
+                format!("decay {:.1}x too {}", r1(2f64.powf(oct.abs())), if oct > 0.0 { "long" } else { "short" })
+            },
         ));
     }
 
     {
         let d = candidate.crest_db - reference.crest_db;
         let ok = d.abs() <= 6.0;
-        axes.push(axis("crest", r1(d), "dB", ok, if ok { "dynamics match".into() } else { format!("crest {} dB too {}", r1(d.abs()), if d > 0.0 { "spiky" } else { "flat" }) }));
+        axes.push(axis(
+            "crest",
+            r1(d),
+            "dB",
+            ok,
+            if ok {
+                "dynamics match".into()
+            } else {
+                format!("crest {} dB too {}", r1(d.abs()), if d > 0.0 { "spiky" } else { "flat" })
+            },
+        ));
     }
     {
         let d = candidate.flatness - reference.flatness;
@@ -615,7 +657,11 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
             r2(d),
             "",
             ok,
-            if ok { "tonal/noisy balance matches".into() } else { format!("{} too {}", r2(d.abs()), if d > 0.0 { "noisy" } else { "tonal" }) },
+            if ok {
+                "tonal/noisy balance matches".into()
+            } else {
+                format!("{} too {}", r2(d.abs()), if d > 0.0 { "noisy" } else { "tonal" })
+            },
         ));
     }
     {
@@ -626,12 +672,17 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
             r1(d),
             "dB/oct",
             ok,
-            if ok { "spectral slope matches".into() } else { format!("tilt {} dB/oct too {}", r1(d.abs()), if d > 0.0 { "bright" } else { "dark" }) },
+            if ok {
+                "spectral slope matches".into()
+            } else {
+                format!("tilt {} dB/oct too {}", r1(d.abs()), if d > 0.0 { "bright" } else { "dark" })
+            },
         ));
     }
     {
         let d_count = candidate.onsets.len() as i64 - reference.onsets.len() as i64;
-        let d_first = candidate.onsets.first().copied().unwrap_or(0.0) - reference.onsets.first().copied().unwrap_or(0.0);
+        let d_first =
+            candidate.onsets.first().copied().unwrap_or(0.0) - reference.onsets.first().copied().unwrap_or(0.0);
         let ok = d_count.abs() <= 1;
         axes.push(axis(
             "onsets",
@@ -639,7 +690,11 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
             "count",
             ok,
             if ok {
-                format!("onset count matches (first onset {}s {})", r2(d_first.abs()), if d_first >= 0.0 { "late" } else { "early" })
+                format!(
+                    "onset count matches (first onset {}s {})",
+                    r2(d_first.abs()),
+                    if d_first >= 0.0 { "late" } else { "early" }
+                )
             } else {
                 format!("{} {} onsets vs the reference", d_count.abs(), if d_count > 0 { "extra" } else { "missing" })
             },
@@ -662,7 +717,16 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
                 r1(mean),
                 "dB",
                 ok,
-                if ok { "frequency balance matches".into() } else { format!("{} {} dB {} the reference", worst.0, r1(worst.1.abs()), if worst.1 > 0.0 { "over" } else { "under" }) },
+                if ok {
+                    "frequency balance matches".into()
+                } else {
+                    format!(
+                        "{} {} dB {} the reference",
+                        worst.0,
+                        r1(worst.1.abs()),
+                        if worst.1 > 0.0 { "over" } else { "under" }
+                    )
+                },
             ));
         }
     }
@@ -670,7 +734,18 @@ pub fn compare(candidate: &Features, reference: &Features) -> Comparison {
     let scored: Vec<&Axis> = axes.iter().filter(|a| !a.skipped).collect();
     let ok_count = scored.iter().filter(|a| a.ok).count();
     let score = if scored.is_empty() { 1.0 } else { ok_count as f64 / scored.len() as f64 };
-    const SEVERITY: [&str; 10] = ["envelope", "onsets", "decay", "attack", "bands", "centroid", "brightnessTrajectory", "tilt", "flatness", "crest"];
+    const SEVERITY: [&str; 10] = [
+        "envelope",
+        "onsets",
+        "decay",
+        "attack",
+        "bands",
+        "centroid",
+        "brightnessTrajectory",
+        "tilt",
+        "flatness",
+        "crest",
+    ];
     let mut failing: Vec<&Axis> = scored.iter().copied().filter(|a| !a.ok).collect();
     failing.sort_by_key(|a| SEVERITY.iter().position(|s| *s == a.axis).unwrap_or(99));
     let summary = match failing.first() {
@@ -753,7 +828,9 @@ mod tests {
     use super::*;
 
     fn tone(hz: f64, secs: f64, sr: u32) -> Vec<f32> {
-        (0..(secs * sr as f64) as usize).map(|i| ((i as f64 * hz * std::f64::consts::TAU / sr as f64).sin() * 0.5) as f32).collect()
+        (0..(secs * sr as f64) as usize)
+            .map(|i| ((i as f64 * hz * std::f64::consts::TAU / sr as f64).sin() * 0.5) as f32)
+            .collect()
     }
 
     #[test]

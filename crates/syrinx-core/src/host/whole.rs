@@ -2,13 +2,13 @@
 //! `render_each`, `--bounce` and `hash` use.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{Error, Meta, RenderOptions, Rendered};
 
-use super::wrapper::{drain, interleave, read_stems, stem_setup, StemForm};
-use super::{geometry, on_own_thread, with_source, Deadline, V8_THREAD_STACK_BYTES};
+use super::wrapper::{StemForm, drain, interleave, read_stems, stem_setup};
+use super::{Deadline, V8_THREAD_STACK_BYTES, geometry, on_own_thread, with_source};
 
 /// One layer's audio, whole.
 pub(super) struct StemAudio {
@@ -38,7 +38,13 @@ impl StemAudio {
 }
 
 /// Renders one layer whole in its own isolate, draining it block by block when it streams.
-pub(super) fn render_stem_here(source: &str, name: &str, opts: &RenderOptions, deadline: Deadline, stem: &str) -> Result<StemAudio, Error> {
+pub(super) fn render_stem_here(
+    source: &str,
+    name: &str,
+    opts: &RenderOptions,
+    deadline: Deadline,
+    stem: &str,
+) -> Result<StemAudio, Error> {
     with_source(source, name, opts, deadline.remaining(), |scope, _name, meta, dependencies, namespace, guard| {
         let (sample_rate, frames) = geometry(&meta, opts)?;
         let stem_names: Vec<String> = read_stems(scope, namespace)?.into_iter().map(|(n, _)| n).collect();
@@ -55,7 +61,13 @@ pub(super) fn render_stem_here(source: &str, name: &str, opts: &RenderOptions, d
 
 /// Renders `stems` whole, concurrently, one isolate and one owned thread each, bounded by the
 /// machine's parallelism. Results come back in the order asked for.
-pub(super) fn render_stems(source: &str, name: &str, opts: &RenderOptions, deadline: Deadline, stems: &[String]) -> Result<Vec<StemAudio>, Error> {
+pub(super) fn render_stems(
+    source: &str,
+    name: &str,
+    opts: &RenderOptions,
+    deadline: Deadline,
+    stems: &[String],
+) -> Result<Vec<StemAudio>, Error> {
     if stems.len() == 1 {
         return Ok(vec![on_own_thread(|| render_stem_here(source, name, opts, deadline, &stems[0]))?]);
     }
@@ -71,26 +83,28 @@ pub(super) fn render_stems(source: &str, name: &str, opts: &RenderOptions, deadl
             std::thread::Builder::new()
                 .name("syrinx-v8".into())
                 .stack_size(V8_THREAD_STACK_BYTES)
-                .spawn_scoped(s, move || loop {
-                    // One layer failing condemns the whole render, so there is no reason to
-                    // compile and run the layers that have not started yet.
-                    if failed.load(Ordering::Relaxed) {
-                        break;
+                .spawn_scoped(s, move || {
+                    loop {
+                        // One layer failing condemns the whole render, so there is no reason to
+                        // compile and run the layers that have not started yet.
+                        if failed.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let i = {
+                            let mut cursor = next.lock().unwrap();
+                            let i = *cursor;
+                            *cursor += 1;
+                            i
+                        };
+                        if i >= stems.len() {
+                            break;
+                        }
+                        let rendered = render_stem_here(source, name, opts, deadline, &stems[i]);
+                        if rendered.is_err() {
+                            failed.store(true, Ordering::Relaxed);
+                        }
+                        *slots[i].lock().unwrap() = Some(rendered);
                     }
-                    let i = {
-                        let mut cursor = next.lock().unwrap();
-                        let i = *cursor;
-                        *cursor += 1;
-                        i
-                    };
-                    if i >= stems.len() {
-                        break;
-                    }
-                    let rendered = render_stem_here(source, name, opts, deadline, &stems[i]);
-                    if rendered.is_err() {
-                        failed.store(true, Ordering::Relaxed);
-                    }
-                    *slots[i].lock().unwrap() = Some(rendered);
                 })
                 .expect("spawn syrinx-v8 thread");
         }

@@ -147,7 +147,12 @@ impl Output {
             .context("opening the output stream")?;
         stream.play().context("starting the output stream")?;
         Ok((
-            Output { device_name: description.name().to_string(), sample_rate: config.sample_rate, channels: config.channels, _stream: stream },
+            Output {
+                device_name: description.name().to_string(),
+                sample_rate: config.sample_rate,
+                channels: config.channels,
+                _stream: stream,
+            },
             producer,
         ))
     }

@@ -135,11 +135,12 @@ pub fn inspect_rows(rows: Vec<(usize, PathBuf)>, repaint: impl Fn() + Send + 'st
         .spawn(move || {
             let opts = RenderOptions { timeout: RENDER_TIMEOUT, ..RenderOptions::default() };
             for (_, path) in rows {
-                let result = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display())).and_then(|source| {
-                    syrinx_core::inspect(&source, &path.to_string_lossy(), &opts)
-                        .map(|info| (info.meta.name, info.meta.duration, info.stems))
-                        .map_err(|e| describe_error(&path, &e))
-                });
+                let result =
+                    std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display())).and_then(|source| {
+                        syrinx_core::inspect(&source, &path.to_string_lossy(), &opts)
+                            .map(|info| (info.meta.name, info.meta.duration, info.stems))
+                            .map_err(|e| describe_error(&path, &e))
+                    });
                 if tx.send(Inspected { path, result }).is_err() {
                     return;
                 }
@@ -165,7 +166,8 @@ mod tests {
             fs::write(dir.join(f), "").unwrap();
         }
         let got = expand(&[dir.clone(), dir.join("a.syr")]);
-        let want: Vec<PathBuf> = ["a.syr", "b.syr", "sub/c.syr"].iter().map(|f| dir.join(f).canonicalize().unwrap()).collect();
+        let want: Vec<PathBuf> =
+            ["a.syr", "b.syr", "sub/c.syr"].iter().map(|f| dir.join(f).canonicalize().unwrap()).collect();
         assert_eq!(got, want);
         fs::remove_dir_all(dir).unwrap();
     }

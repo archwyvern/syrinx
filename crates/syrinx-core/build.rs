@@ -22,10 +22,8 @@ fn main() {
     println!("cargo:rerun-if-changed={}", root.display());
     let mut files = Vec::new();
     walk(&root, &mut files);
-    let mut rows: Vec<(String, PathBuf)> = files
-        .into_iter()
-        .map(|p| (p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), p))
-        .collect();
+    let mut rows: Vec<(String, PathBuf)> =
+        files.into_iter().map(|p| (p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), p)).collect();
     rows.sort();
     let mut code = String::from("/// Every file of the framework, sorted by path.\npub const FILES: &[File] = &[\n");
     for (rel, abs) in &rows {

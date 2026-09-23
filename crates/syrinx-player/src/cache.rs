@@ -57,9 +57,8 @@ impl Cache {
             }
             let dir = entry.path();
             let size = dir_size(&dir)?;
-            let stamp = fs::metadata(dir.join(META))
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let stamp =
+                fs::metadata(dir.join(META)).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
             total += size;
             dirs.push((stamp, dir, size));
         }
@@ -245,9 +244,8 @@ impl StemFile {
             return Ok(());
         }
         self.file.sync_all().with_context(|| format!("syncing {}", self.part_path.display()))?;
-        fs::rename(&self.part_path, &self.final_path).with_context(|| {
-            format!("renaming {} to {}", self.part_path.display(), self.final_path.display())
-        })?;
+        fs::rename(&self.part_path, &self.final_path)
+            .with_context(|| format!("renaming {} to {}", self.part_path.display(), self.final_path.display()))?;
         self.complete.store(true, Ordering::Release);
         Ok(())
     }

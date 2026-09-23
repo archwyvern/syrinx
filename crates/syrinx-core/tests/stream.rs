@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use syrinx_core::{mix_from, render, render_each, ErrorKind, RenderOptions, Source, Stream, Target, BLOCK_FRAMES};
+use syrinx_core::{BLOCK_FRAMES, ErrorKind, RenderOptions, Source, Stream, Target, mix_from, render, render_each};
 
 fn opts() -> RenderOptions {
     RenderOptions::default()
@@ -342,11 +342,9 @@ export const stems = { a(ctx) { return (offset, frames) => [new Float32Array(fra
 
 #[test]
 fn whole_render_helpers_refuse_inside_a_block() {
-    for (call, fix) in [
-        ("normalize(out)", "limiter"),
-        ("fade(ctx, out, 0.01, 0.01)", "Env.gate"),
-        ("place(ctx, out, 0)", "- offset"),
-    ] {
+    for (call, fix) in
+        [("normalize(out)", "limiter"), ("fade(ctx, out, 0.01, 0.01)", "Env.gate"), ("place(ctx, out, 0)", "- offset")]
+    {
         let src = format!(
             "import {{ normalize, fade, place }} from \"./framework/dsp.js\";\nexport const meta = {{ api: 4, duration: 0.1, channels: 1 }};\n\
              export const stems = {{ a(ctx) {{ return (offset, frames) => {{ const out = new Float32Array(frames); return {call}; }}; }} }};\n"
@@ -493,7 +491,9 @@ export const stems = { a(ctx) { return (offset, frames) => { if (offset >= 8192)
 "#;
     let started = Instant::now();
     {
-        let mut stream = Stream::open(src, &in_project("x.syr"), &RenderOptions { timeout: Duration::from_secs(30), ..opts() }).unwrap();
+        let mut stream =
+            Stream::open(src, &in_project("x.syr"), &RenderOptions { timeout: Duration::from_secs(30), ..opts() })
+                .unwrap();
         let first = stream.next_block().unwrap().unwrap();
         assert_eq!(first.offset, 0);
         // The layer is now spinning on its third block, ahead of us. Drop must stop it.
@@ -508,7 +508,9 @@ export const meta = { api: 4, duration: 2, channels: 1 };
 export const stems = { a(ctx) { return (offset, frames) => { if (offset === 8192) for (;;) {} return new Float32Array(frames); }; } };
 "#;
     let started = Instant::now();
-    let mut stream = Stream::open(src, &in_project("x.syr"), &RenderOptions { timeout: Duration::from_millis(300), ..opts() }).unwrap();
+    let mut stream =
+        Stream::open(src, &in_project("x.syr"), &RenderOptions { timeout: Duration::from_millis(300), ..opts() })
+            .unwrap();
     assert_eq!(stream.next_block().unwrap().unwrap().offset, 0);
     assert_eq!(stream.next_block().unwrap().unwrap().offset, 4096);
     let e = stream.next_block().unwrap_err();
@@ -524,7 +526,9 @@ import { stream } from "./framework/dsp.js";
 export const meta = { api: 4, duration: 1, channels: 1 };
 export const stems = { a(ctx) { return stream(ctx, (t) => t); } };
 "#;
-    let mut s = Stream::open(src, &in_project("x.syr"), &RenderOptions { timeout: Duration::from_millis(200), ..opts() }).unwrap();
+    let mut s =
+        Stream::open(src, &in_project("x.syr"), &RenderOptions { timeout: Duration::from_millis(200), ..opts() })
+            .unwrap();
     assert!(s.next_block().unwrap().is_some());
     // Longer than the budget, with the producer's queue full and every block already computed.
     std::thread::sleep(Duration::from_millis(500));

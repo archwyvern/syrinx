@@ -12,7 +12,8 @@ pub fn register(exe: &Path) -> Result<()> {
     use winreg::enums::HKEY_CURRENT_USER;
 
     let exe = exe.display().to_string();
-    let classes = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software\\Classes", winreg::enums::KEY_ALL_ACCESS)?;
+    let classes =
+        RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software\\Classes", winreg::enums::KEY_ALL_ACCESS)?;
     let (ext, _) = classes.create_subkey(".syr")?;
     ext.set_value("", &"syrinx.source")?;
     ext.set_value("Content Type", &"audio/x-syrinx")?;
@@ -33,7 +34,8 @@ pub fn unregister() -> Result<()> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
-    let classes = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software\\Classes", winreg::enums::KEY_ALL_ACCESS)?;
+    let classes =
+        RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software\\Classes", winreg::enums::KEY_ALL_ACCESS)?;
     let _ = classes.delete_subkey_all("syrinx.source");
     let _ = classes.delete_subkey_all(".syr");
     println!("unregistered .syr");

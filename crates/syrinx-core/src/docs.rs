@@ -14,7 +14,7 @@
 
 use serde::Serialize;
 
-use crate::{Error, API_FLOOR, BLOCK_FRAMES, PRELUDE_VERSION, TYPES};
+use crate::{API_FLOOR, BLOCK_FRAMES, Error, PRELUDE_VERSION, TYPES};
 
 /// Version of this JSON shape. 3 replaced the `core` flag on entries with modules, each a part of
 /// the reference: the core, or the framework.
@@ -167,8 +167,13 @@ pub fn docs() -> Result<Docs, Error> {
 
 /// The module's reference, once its declared values are exactly its exports.
 fn verified(module: &str, part: Part, declared: Declarations, actual: Vec<String>) -> Result<ModuleDocs, Error> {
-    let values: Vec<&str> =
-        declared.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.is_value()).map(|e| e.name.as_str()).collect();
+    let values: Vec<&str> = declared
+        .groups
+        .iter()
+        .flat_map(|g| g.entries.iter())
+        .filter(|e| e.is_value())
+        .map(|e| e.name.as_str())
+        .collect();
     let missing: Vec<&str> = actual.iter().filter(|a| !values.contains(&a.as_str())).map(String::as_str).collect();
     let extra: Vec<&str> = values.iter().filter(|d| !actual.iter().any(|a| a == *d)).copied().collect();
     if !missing.is_empty() || !extra.is_empty() {
@@ -243,7 +248,11 @@ fn section_name(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("//")?.trim_start();
     let rest = rest.trim_start_matches('-');
     let trimmed = rest.trim();
-    if line.trim_start_matches("//").trim_start().starts_with("----") && !trimmed.is_empty() { Some(trimmed) } else { None }
+    if line.trim_start_matches("//").trim_start().starts_with("----") && !trimmed.is_empty() {
+        Some(trimmed)
+    } else {
+        None
+    }
 }
 
 /// Reads `/** ... */`, one line or many, and returns the prose inside.
@@ -325,10 +334,24 @@ fn read_entry(first: &str, lines: &mut Lines<'_>, at: usize, doc: String) -> Res
     let rest = signature.strip_prefix("export ").unwrap_or(&signature);
 
     if let Some(r) = rest.strip_prefix("function ") {
-        return Ok(Entry { kind: EntryKind::Function, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new() });
+        return Ok(Entry {
+            kind: EntryKind::Function,
+            name: identifier(r).to_string(),
+            signature,
+            doc,
+            members: Vec::new(),
+            values: Vec::new(),
+        });
     }
     if let Some(r) = rest.strip_prefix("const ") {
-        return Ok(Entry { kind: EntryKind::Constant, name: identifier(r).to_string(), signature, doc, members: Vec::new(), values: Vec::new() });
+        return Ok(Entry {
+            kind: EntryKind::Constant,
+            name: identifier(r).to_string(),
+            signature,
+            doc,
+            members: Vec::new(),
+            values: Vec::new(),
+        });
     }
     if let Some(r) = rest.strip_prefix("type ") {
         let name = identifier(r).to_string();
@@ -445,10 +468,7 @@ mod tests {
         let dsp = dsp();
         assert!(dsp.summary.starts_with("The syrinx framework's dsp module"), "{}", dsp.summary);
         let names: Vec<&str> = dsp.groups.iter().map(|g| g.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["Scalars", "Oscillators", "Noise", "Envelopes", "Filters", "Delays and reverb", "Buffers"]
-        );
+        assert_eq!(names, ["Scalars", "Oscillators", "Noise", "Envelopes", "Filters", "Delays and reverb", "Buffers"]);
     }
 
     #[test]
@@ -508,7 +528,10 @@ mod tests {
         // A wrapped union of string literals becomes a choice with its alternatives.
         let biquad_type = entry(&dsp, "BiquadType");
         assert_eq!(biquad_type.kind, EntryKind::Choice);
-        assert_eq!(biquad_type.values, ["lowpass", "highpass", "bandpass", "notch", "allpass", "peak", "lowshelf", "highshelf"]);
+        assert_eq!(
+            biquad_type.values,
+            ["lowpass", "highpass", "bandpass", "notch", "allpass", "peak", "lowshelf", "highshelf"]
+        );
     }
 
     #[test]
@@ -530,7 +553,10 @@ mod tests {
         let unterminated = "// ---- X\nexport class A {\n  foo(): void;\n";
         assert!(parse(unterminated).unwrap_err().message.contains("closing brace"));
         let late_import = "// ---- X\nimport type { A } from \"syrinx\";\n";
-        assert!(parse(late_import).unwrap_err().message.contains("cannot parse"), "an import inside a section is not skipped");
+        assert!(
+            parse(late_import).unwrap_err().message.contains("cannot parse"),
+            "an import inside a section is not skipped"
+        );
     }
 
     #[test]
@@ -539,10 +565,10 @@ mod tests {
         // exported, in the core and in the framework. Fails when a module and its declarations
         // drift apart.
         let docs = docs().unwrap();
-        assert_eq!(docs.modules.iter().map(|m| (m.module.as_str(), m.part)).collect::<Vec<_>>(), [
-            ("syrinx", Part::Core),
-            ("framework/dsp.js", Part::Framework)
-        ]);
+        assert_eq!(
+            docs.modules.iter().map(|m| (m.module.as_str(), m.part)).collect::<Vec<_>>(),
+            [("syrinx", Part::Core), ("framework/dsp.js", Part::Framework)]
+        );
         let values = |m: &ModuleDocs| -> Vec<String> {
             m.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.is_value()).map(|e| e.name.clone()).collect()
         };

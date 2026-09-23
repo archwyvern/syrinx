@@ -4,10 +4,10 @@
 
 use std::time::Duration;
 
-use crate::{Error, ErrorKind, Meta, BLOCK_FRAMES, RUN};
+use crate::{BLOCK_FRAMES, Error, ErrorKind, Meta, RUN};
 
 use super::watchdog::Guard;
-use super::{caught_in, get, run_script, RUN_ORIGIN};
+use super::{RUN_ORIGIN, caught_in, get, run_script};
 
 /// The leading letter is load-bearing: an integer-like key sorts itself to the front of a
 /// JavaScript object, which would silently change the order stems are summed in.
@@ -29,7 +29,8 @@ pub(super) fn read_stems<'s>(
             "source has no `stems` export; a sound is one or more named layers: export const stems = { name(ctx) { ... } }",
         ));
     };
-    let obj = v8::Local::<v8::Object>::try_from(value).map_err(|_| Error::contract("`stems` must be an object of functions"))?;
+    let obj = v8::Local::<v8::Object>::try_from(value)
+        .map_err(|_| Error::contract("`stems` must be an object of functions"))?;
     let keys = obj
         .get_own_property_names(scope, v8::GetPropertyNamesArgsBuilder::new().build())
         .ok_or_else(|| Error::internal("cannot enumerate `stems`"))?;
@@ -69,7 +70,10 @@ pub(super) fn run_entry<'s>(
 }
 
 /// A Float32Array over a copy of `data`.
-pub(super) fn f32_array<'s>(scope: &mut v8::PinScope<'s, '_>, data: &[f32]) -> Result<v8::Local<'s, v8::Float32Array>, Error> {
+pub(super) fn f32_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: &[f32],
+) -> Result<v8::Local<'s, v8::Float32Array>, Error> {
     let mut bytes = Vec::with_capacity(data.len() * 4);
     for v in data {
         bytes.extend_from_slice(&v.to_le_bytes());
@@ -81,7 +85,10 @@ pub(super) fn f32_array<'s>(scope: &mut v8::PinScope<'s, '_>, data: &[f32]) -> R
 
 /// An array of `channels` Float32Arrays per layer, from planes: what the run wrapper's mix
 /// stage takes as `buffers` (whole) or `blocks` (one block).
-pub(super) fn plane_arrays<'s>(scope: &mut v8::PinScope<'s, '_>, layers: &[Vec<Vec<f32>>]) -> Result<v8::Local<'s, v8::Array>, Error> {
+pub(super) fn plane_arrays<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    layers: &[Vec<Vec<f32>>],
+) -> Result<v8::Local<'s, v8::Array>, Error> {
     let outer = v8::Array::new(scope, layers.len() as i32);
     for (i, planes) in layers.iter().enumerate() {
         let inner = v8::Array::new(scope, planes.len() as i32);
@@ -120,8 +127,8 @@ pub(super) fn planes_from<'s>(
     frames: usize,
     channels: u32,
 ) -> Result<Vec<Vec<f32>>, Error> {
-    let array =
-        v8::Local::<v8::Array>::try_from(value).map_err(|_| Error::internal("the run wrapper did not return planes"))?;
+    let array = v8::Local::<v8::Array>::try_from(value)
+        .map_err(|_| Error::internal("the run wrapper did not return planes"))?;
     if array.length() != channels {
         return Err(Error::internal(format!(
             "the run wrapper returned {} plane(s), expected {channels}",
@@ -157,9 +164,7 @@ pub(super) fn interleave(planes: &[Vec<f32>], frames: usize, channels: u32) -> V
 
 /// Interleaved frames back to planes.
 pub(super) fn deinterleave(samples: &[f32], frames: usize, channels: u32) -> Vec<Vec<f32>> {
-    (0..channels as usize)
-        .map(|c| (0..frames).map(|i| samples[i * channels as usize + c]).collect())
-        .collect()
+    (0..channels as usize).map(|c| (0..frames).map(|i| samples[i * channels as usize + c]).collect()).collect()
 }
 
 /// Frame-major, so the frame reported is the earliest one, as the JavaScript host reports it.

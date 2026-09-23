@@ -37,9 +37,9 @@ use std::sync::Once;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::{Error, ErrorKind, Inspected, Meta, RenderOptions, Rendered, Target, API_FLOOR, MATH, PRELUDE_VERSION};
+use crate::{API_FLOOR, Error, ErrorKind, Inspected, MATH, Meta, PRELUDE_VERSION, RenderOptions, Rendered, Target};
 
-use loader::{compile_registered, resolve_module, with_loader, Loader, LOADER};
+use loader::{LOADER, Loader, compile_registered, resolve_module, with_loader};
 use source::validate_selection;
 use watchdog::{Guard, Watchdog};
 use whole::render_stems;
@@ -189,7 +189,12 @@ pub fn render_each(source: &str, name: &str, opts: &RenderOptions, which: &[Stri
 }
 
 /// Runs only the mix stage, over layers rendered earlier. `stems` are interleaved.
-pub fn mix_from(source: &str, name: &str, opts: &RenderOptions, stems: &[(String, Vec<f32>)]) -> Result<Rendered, Error> {
+pub fn mix_from(
+    source: &str,
+    name: &str,
+    opts: &RenderOptions,
+    stems: &[(String, Vec<f32>)],
+) -> Result<Rendered, Error> {
     let deadline = Deadline::new(opts.timeout);
     let src = Source::open_with(source, name, opts, deadline)?;
     let frames = src.frames();
@@ -261,13 +266,19 @@ fn with_source<T>(
         }
     };
     let root = match &opts.root {
-        Some(r) => Some(std::fs::canonicalize(r).map_err(|e| Error::contract(format!("project root {}: {e}", r.display())))?),
+        Some(r) => {
+            Some(std::fs::canonicalize(r).map_err(|e| Error::contract(format!("project root {}: {e}", r.display())))?)
+        }
         None => None,
     };
     if let Some(root) = &root
         && !entry_path.starts_with(root)
     {
-        return Err(Error::contract(format!("{} is outside the project root {}", entry_path.display(), root.display())));
+        return Err(Error::contract(format!(
+            "{} is outside the project root {}",
+            entry_path.display(),
+            root.display()
+        )));
     }
 
     init_v8();
@@ -353,7 +364,11 @@ fn install_standard_math(scope: &mut v8::PinScope<'_, '_>) -> Result<(), Error> 
     run_script(scope, MATH, MATH_ORIGIN).map(|_| ())
 }
 
-fn run_script<'s>(scope: &mut v8::PinScope<'s, '_>, code: &str, origin_name: &str) -> Result<v8::Local<'s, v8::Value>, Error> {
+fn run_script<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    code: &str,
+    origin_name: &str,
+) -> Result<v8::Local<'s, v8::Value>, Error> {
     v8::tc_scope!(let tc, scope);
     let code = v8::String::new(tc, code).ok_or_else(|| Error::contract("source too large for V8"))?;
     let name = v8::String::new(tc, origin_name).unwrap();
@@ -365,7 +380,11 @@ fn run_script<'s>(scope: &mut v8::PinScope<'s, '_>, code: &str, origin_name: &st
     script.run(tc).ok_or_else(|| caught_in(tc, ErrorKind::Runtime))
 }
 
-fn get<'s>(scope: &mut v8::PinScope<'s, '_>, obj: v8::Local<v8::Object>, key: &str) -> Option<v8::Local<'s, v8::Value>> {
+fn get<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    obj: v8::Local<v8::Object>,
+    key: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
     let k = v8::String::new(scope, key).unwrap();
     obj.get(scope, k.into()).filter(|v| !v.is_undefined())
 }
@@ -379,7 +398,14 @@ fn caught_in(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>, kind: Er
         return e;
     }
     let Some(exception) = tc.exception() else {
-        return Error { kind, message: "unknown error".into(), file: None, line: None, column: None, diagnostics: Vec::new() };
+        return Error {
+            kind,
+            message: "unknown error".into(),
+            file: None,
+            line: None,
+            column: None,
+            diagnostics: Vec::new(),
+        };
     };
     let message = exception.to_string(tc).map(|s| s.to_rust_string_lossy(tc)).unwrap_or_else(|| "unknown error".into());
     let stack = tc.stack_trace().and_then(|s| s.to_string(tc)).map(|s| s.to_rust_string_lossy(tc));
@@ -397,11 +423,13 @@ fn caught_in(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>, kind: Er
 }
 
 /// File/line/column of a message, unless it points into the prelude or the harness.
-fn position_of(scope: &mut v8::PinScope<'_, '_>, msg: v8::Local<v8::Message>) -> (Option<String>, Option<u32>, Option<u32>) {
-    let resource = msg.get_script_resource_name(scope).and_then(|n| n.to_string(scope)).map(|n| n.to_rust_string_lossy(scope));
-    let positioned = resource
-        .as_deref()
-        .is_some_and(|r| r != PRELUDE_SPECIFIER && r != RUN_ORIGIN && r != MATH_ORIGIN);
+fn position_of(
+    scope: &mut v8::PinScope<'_, '_>,
+    msg: v8::Local<v8::Message>,
+) -> (Option<String>, Option<u32>, Option<u32>) {
+    let resource =
+        msg.get_script_resource_name(scope).and_then(|n| n.to_string(scope)).map(|n| n.to_rust_string_lossy(scope));
+    let positioned = resource.as_deref().is_some_and(|r| r != PRELUDE_SPECIFIER && r != RUN_ORIGIN && r != MATH_ORIGIN);
     if positioned {
         (resource, msg.get_line_number(scope).map(|l| l as u32), Some(msg.get_start_column() as u32 + 1))
     } else {
@@ -413,7 +441,8 @@ fn position_of(scope: &mut v8::PinScope<'_, '_>, msg: v8::Local<v8::Message>) ->
 /// evaluation error). Positions are reported for any user module; throws inside the prelude or
 /// the harness carry no position.
 fn error_from_exception(scope: &mut v8::PinScope<'_, '_>, exception: v8::Local<v8::Value>, kind: ErrorKind) -> Error {
-    let message = exception.to_string(scope).map(|s| s.to_rust_string_lossy(scope)).unwrap_or_else(|| "unknown error".into());
+    let message =
+        exception.to_string(scope).map(|s| s.to_rust_string_lossy(scope)).unwrap_or_else(|| "unknown error".into());
     let stack = v8::Local::<v8::Object>::try_from(exception)
         .ok()
         .and_then(|o| get(scope, o, "stack"))

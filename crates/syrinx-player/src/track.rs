@@ -128,7 +128,11 @@ impl Track {
         // mix file says which form the master is without asking core again.
         let (mix, master) = if source.has_mix() {
             let file = StemFile::open(&dir, MIX_NAME, frames, channels)?;
-            if file.is_complete() { (Some(Arc::new(file)), Master::Whole) } else { (Some(Arc::new(file)), Master::Unknown) }
+            if file.is_complete() {
+                (Some(Arc::new(file)), Master::Whole)
+            } else {
+                (Some(Arc::new(file)), Master::Unknown)
+            }
         } else {
             (None, Master::Sum)
         };
@@ -301,7 +305,8 @@ impl Track {
         let (tx, rx) = mpsc::channel::<Result<()>>();
         let mut handles = Vec::with_capacity(stems.len());
         for mut stem in stems {
-            let index = self.stem_names.iter().position(|n| n == stem.name()).context("core returned an unknown layer")?;
+            let index =
+                self.stem_names.iter().position(|n| n == stem.name()).context("core returned an unknown layer")?;
             let file = Arc::clone(&self.stems[index]);
             let path = self.path.clone();
             let tx = tx.clone();

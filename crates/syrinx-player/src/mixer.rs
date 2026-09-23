@@ -83,13 +83,7 @@ impl Gains {
     pub fn effective(&self) -> Vec<f32> {
         let any_solo = self.solo.iter().any(|s| s.load(Ordering::Relaxed));
         (0..self.len())
-            .map(|i| {
-                if self.muted(i) || (any_solo && !self.soloed(i)) {
-                    0.0
-                } else {
-                    self.gain(i)
-                }
-            })
+            .map(|i| if self.muted(i) || (any_solo && !self.soloed(i)) { 0.0 } else { self.gain(i) })
             .collect()
     }
 
@@ -108,12 +102,20 @@ impl Gains {
 }
 
 pub enum Command {
-    Load { track: Arc<Track>, gains: Arc<Gains>, start_frame: usize },
+    Load {
+        track: Arc<Track>,
+        gains: Arc<Gains>,
+        start_frame: usize,
+    },
     Seek(usize),
     Unload,
     Loop(bool),
     /// The window opened a new device: a new ring to feed, at its rate and channel count.
-    Output { producer: rtrb::Producer<f32>, sample_rate: u32, channels: u16 },
+    Output {
+        producer: rtrb::Producer<f32>,
+        sample_rate: u32,
+        channels: u16,
+    },
     Shutdown,
 }
 
@@ -192,7 +194,10 @@ impl MixerHandle {
             loop_on: false,
             loaded: None,
         };
-        let join = std::thread::Builder::new().name("syrinx-player-mixer".into()).spawn(move || worker.run()).expect("spawn the mixer thread");
+        let join = std::thread::Builder::new()
+            .name("syrinx-player-mixer".into())
+            .spawn(move || worker.run())
+            .expect("spawn the mixer thread");
         MixerHandle { tx, status, checkpoints, join: Some(join) }
     }
 
@@ -321,14 +326,15 @@ impl Worker {
         match command {
             Command::Load { track, gains, start_frame } => {
                 self.flush_ring();
-                let resample = match Resample::new(track.sample_rate, self.device_rate, track.channels as usize, MIX_FRAMES) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        *self.status.error.lock().unwrap() = Some(format!("{e:#}"));
-                        self.status.at_end.store(true, Ordering::Relaxed);
-                        return Step::Continue;
-                    }
-                };
+                let resample =
+                    match Resample::new(track.sample_rate, self.device_rate, track.channels as usize, MIX_FRAMES) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            *self.status.error.lock().unwrap() = Some(format!("{e:#}"));
+                            self.status.at_end.store(true, Ordering::Relaxed);
+                            return Step::Continue;
+                        }
+                    };
                 let n = track.stems.len();
                 let start = start_frame.min(track.frames);
                 self.loaded = Some(Loaded {
@@ -498,7 +504,11 @@ impl Worker {
         let mixed = (|| -> anyhow::Result<()> {
             match form {
                 Form::Whole if unity => {
-                    track.mix.as_ref().expect("a whole master has a mix file").read_frames(position, n, &mut l.mixed)?;
+                    track.mix.as_ref().expect("a whole master has a mix file").read_frames(
+                        position,
+                        n,
+                        &mut l.mixed,
+                    )?;
                 }
                 Form::Live => {
                     let Some(mixer) = l.live.as_mut() else {
@@ -611,7 +621,13 @@ enum Form {
 }
 
 /// Every layer's chunk at `offset`, scaled by its gain, into `bufs` (parallel to the layers).
-fn read_gained(track: &Track, offset: usize, frames: usize, gains: &[f32], bufs: &mut [Vec<f32>]) -> anyhow::Result<()> {
+fn read_gained(
+    track: &Track,
+    offset: usize,
+    frames: usize,
+    gains: &[f32],
+    bufs: &mut [Vec<f32>],
+) -> anyhow::Result<()> {
     for ((file, buf), g) in track.stems.iter().zip(bufs.iter_mut()).zip(gains) {
         file.read_frames(offset, frames, buf)?;
         if *g != 1.0 {
@@ -676,7 +692,11 @@ mod tests {
 
     /// Plays a track through the real pipeline (files, mixer thread, ring) with this thread
     /// standing in for the audio callback, and returns what came out of the ring.
-    fn play_through(source: &str, seek_to: Option<usize>, until_end: bool) -> (Vec<f32>, Arc<Shared>, MixerHandle, Arc<Track>) {
+    fn play_through(
+        source: &str,
+        seek_to: Option<usize>,
+        until_end: bool,
+    ) -> (Vec<f32>, Arc<Shared>, MixerHandle, Arc<Track>) {
         use crate::cache::Cache;
         let dir = std::env::temp_dir().join(format!(
             "syrinx-player-mixer-{}-{}",
@@ -778,7 +798,11 @@ mod tests {
         let consumed = shared.consumed.load(Ordering::Relaxed);
         let position = handle.checkpoints.position(consumed, 48_000, track.sample_rate).unwrap();
         let played = out.len() / 2;
-        assert_eq!(position, target + played, "the checkpoints must place the playhead exactly where the seek landed plus what played");
+        assert_eq!(
+            position,
+            target + played,
+            "the checkpoints must place the playhead exactly where the seek landed plus what played"
+        );
         let expected = &want.samples[target * 2..target * 2 + out.len()];
         let worst = out.iter().zip(expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst < 1e-4, "post-seek audio differs from the canonical render by {worst}");

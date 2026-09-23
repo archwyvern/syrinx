@@ -42,7 +42,8 @@ impl Watch {
                 }
             }
         };
-        let mut watcher = RecommendedWatcher::new(handler, notify::Config::default()).context("starting the file watcher")?;
+        let mut watcher =
+            RecommendedWatcher::new(handler, notify::Config::default()).context("starting the file watcher")?;
         let mut dirs: HashSet<PathBuf> = HashSet::new();
         for file in &files {
             if let Some(dir) = file.parent() {

@@ -53,7 +53,11 @@ fn vendoring_writes_updates_and_never_deletes() {
         assert_eq!(*state, want, "{path}");
     }
     assert_eq!(std::fs::read_to_string(dir.join("dsp.js")).unwrap(), framework::file("dsp.js").unwrap());
-    assert_eq!(std::fs::read_to_string(dir.join("mine.js")).unwrap(), "export const x = 1;\n", "a project's own file is never touched");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("mine.js")).unwrap(),
+        "export const x = 1;\n",
+        "a project's own file is never touched"
+    );
 
     let third = framework::vendor(&dir, "9.9.10").unwrap();
     let changed: Vec<&str> = third.iter().filter(|(_, s)| *s != Vendored::Unchanged).map(|(p, _)| p.as_str()).collect();

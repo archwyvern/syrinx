@@ -68,7 +68,12 @@ pub struct PlayerApp {
 }
 
 impl PlayerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, cache: Cache, initial: Vec<PathBuf>, requests: Receiver<Request>) -> Result<PlayerApp> {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        cache: Cache,
+        initial: Vec<PathBuf>,
+        requests: Receiver<Request>,
+    ) -> Result<PlayerApp> {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
         let shared = Shared::new(settings.volume);
         let output_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -304,7 +309,11 @@ impl PlayerApp {
         };
         let position = self.position().unwrap_or(0);
         let was_playing = self.shared.playing.load(Ordering::Relaxed);
-        eprintln!("reload: {} changed, resuming at {}", self.playlist.rows[i].path.display(), fmt_time(position as f64 / self.track.as_ref().map_or(48_000.0, |t| t.sample_rate as f64)));
+        eprintln!(
+            "reload: {} changed, resuming at {}",
+            self.playlist.rows[i].path.display(),
+            fmt_time(position as f64 / self.track.as_ref().map_or(48_000.0, |t| t.sample_rate as f64))
+        );
         if let Err(e) = self.load(i, position) {
             self.playlist.rows[i].error = Some(format!("{e:#}"));
             self.say(format!("{e:#}"));
@@ -537,7 +546,8 @@ impl PlayerApp {
     }
 
     fn handle_drops(&mut self) {
-        let dropped: Vec<PathBuf> = self.ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        let dropped: Vec<PathBuf> =
+            self.ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
             self.add_paths(&dropped, false);
         }
@@ -581,7 +591,11 @@ impl PlayerApp {
                 let duration = row.duration.map(fmt_time).unwrap_or_default();
                 let response = ui
                     .horizontal(|ui| {
-                        let marker = if is_current { if self.shared.playing.load(Ordering::Relaxed) { "\u{25b6}" } else { "\u{23f8}" } } else { " " };
+                        let marker = if is_current {
+                            if self.shared.playing.load(Ordering::Relaxed) { "\u{25b6}" } else { "\u{23f8}" }
+                        } else {
+                            " "
+                        };
                         ui.add_sized([14.0, 18.0], egui::Label::new(RichText::new(marker).color(theme::ACCENT)));
                         let r = ui.selectable_label(is_selected, name);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -643,7 +657,10 @@ impl PlayerApp {
             let x = rect.left() + (c as f32 + 0.5) * column_width;
             let y0 = mid - hi.clamp(-1.0, 1.0) * half;
             let y1 = mid - lo.clamp(-1.0, 1.0) * half;
-            painter.line_segment([egui::pos2(x, y0.min(mid - 0.5)), egui::pos2(x, y1.max(mid + 0.5))], Stroke::new(column_width.max(1.0), theme::WAVE));
+            painter.line_segment(
+                [egui::pos2(x, y0.min(mid - 0.5)), egui::pos2(x, y1.max(mid + 0.5))],
+                Stroke::new(column_width.max(1.0), theme::WAVE),
+            );
         }
         // The unrendered tail: hatched over, from the slowest layer's frontier to the end.
         let unity = self.gains.as_ref().is_none_or(|g| g.all_unity());
@@ -654,13 +671,19 @@ impl PlayerApp {
             painter.rect_filled(tail, 0.0, theme::PENDING);
             let mut hx = x;
             while hx < rect.right() {
-                painter.line_segment([egui::pos2(hx, rect.bottom()), egui::pos2((hx + rect.height()).min(rect.right()), rect.top())], Stroke::new(1.0, Color32::from_gray(0x60)));
+                painter.line_segment(
+                    [egui::pos2(hx, rect.bottom()), egui::pos2((hx + rect.height()).min(rect.right()), rect.top())],
+                    Stroke::new(1.0, Color32::from_gray(0x60)),
+                );
                 hx += 12.0;
             }
         }
         if let Some(position) = self.position() {
             let x = rect.left() + rect.width() * position as f32 / track.frames.max(1) as f32;
-            painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(2.0, theme::PLAYHEAD));
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                Stroke::new(2.0, theme::PLAYHEAD),
+            );
         }
         if response.clicked() || response.dragged() {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -691,7 +714,11 @@ impl PlayerApp {
                 let mut gain = gains.gain(i);
                 let mut muted = gains.muted(i);
                 let mut soloed = gains.soloed(i);
-                let label = if muted || (gains.effective()[i] == 0.0) { RichText::new(name).color(theme::LABEL) } else { RichText::new(name) };
+                let label = if muted || (gains.effective()[i] == 0.0) {
+                    RichText::new(name).color(theme::LABEL)
+                } else {
+                    RichText::new(name)
+                };
                 ui.add_sized([110.0, 20.0], egui::Label::new(label).truncate());
                 let slider = egui::Slider::new(&mut gain, 0.0..=2.0).show_value(false);
                 if ui.add(slider).changed() {
@@ -715,19 +742,34 @@ impl PlayerApp {
         let has_track = self.track.is_some();
         let playing = self.shared.playing.load(Ordering::Relaxed);
         ui.horizontal(|ui| {
-            if ui.add_enabled(self.playlist.prev().is_some(), egui::Button::new("\u{23ee}")).on_hover_text("Previous (P)").clicked() {
+            if ui
+                .add_enabled(self.playlist.prev().is_some(), egui::Button::new("\u{23ee}"))
+                .on_hover_text("Previous (P)")
+                .clicked()
+            {
                 if let Some(prev) = self.playlist.prev() {
                     self.play(prev);
                 }
             }
             let play_label = if playing && has_track { "\u{23f8}" } else { "\u{25b6}" };
-            if ui.add_enabled(has_track || !self.playlist.rows.is_empty(), egui::Button::new(play_label).min_size(Vec2::new(40.0, 0.0))).on_hover_text("Play / pause (Space)").clicked() {
+            if ui
+                .add_enabled(
+                    has_track || !self.playlist.rows.is_empty(),
+                    egui::Button::new(play_label).min_size(Vec2::new(40.0, 0.0)),
+                )
+                .on_hover_text("Play / pause (Space)")
+                .clicked()
+            {
                 self.toggle_play();
             }
             if ui.add_enabled(has_track, egui::Button::new("\u{23f9}")).on_hover_text("Stop").clicked() {
                 self.stop();
             }
-            if ui.add_enabled(self.playlist.next().is_some(), egui::Button::new("\u{23ed}")).on_hover_text("Next (N)").clicked() {
+            if ui
+                .add_enabled(self.playlist.next().is_some(), egui::Button::new("\u{23ed}"))
+                .on_hover_text("Next (N)")
+                .clicked()
+            {
                 if let Some(next) = self.playlist.next() {
                     self.play(next);
                 }
@@ -748,7 +790,11 @@ impl PlayerApp {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut volume = self.shared.volume();
-                if ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false)).on_hover_text("Volume (Up / Down)").changed() {
+                if ui
+                    .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+                    .on_hover_text("Volume (Up / Down)")
+                    .changed()
+                {
                     self.shared.set_volume(volume);
                     self.settings.volume = volume;
                 }
@@ -778,10 +824,16 @@ impl PlayerApp {
                         self.rerender();
                         ui.close();
                     }
-                    ui.label(RichText::new(format!("cache: {}", self.cache.root().display())).color(theme::LABEL).small());
+                    ui.label(
+                        RichText::new(format!("cache: {}", self.cache.root().display())).color(theme::LABEL).small(),
+                    );
                 });
                 let mut reload = self.settings.reload_on_change;
-                if ui.toggle_value(&mut reload, "reload on change").on_hover_text("Re-render when the source or an import changes").changed() {
+                if ui
+                    .toggle_value(&mut reload, "reload on change")
+                    .on_hover_text("Re-render when the source or an import changes")
+                    .changed()
+                {
                     self.settings.reload_on_change = reload;
                     if reload {
                         self.reload_watch();
@@ -843,9 +895,17 @@ impl PlayerApp {
         match render {
             Render::Rendering { started } => {
                 let frontier = track.stem_frontier();
-                parts.push(format!("rendering {:.1} s, {} rendered", started.elapsed().as_secs_f64(), fmt_time(frontier as f64 / track.sample_rate as f64)));
+                parts.push(format!(
+                    "rendering {:.1} s, {} rendered",
+                    started.elapsed().as_secs_f64(),
+                    fmt_time(frontier as f64 / track.sample_rate as f64)
+                ));
             }
-            Render::Done { took } => parts.push(if took < Duration::from_millis(5) { "from cache".into() } else { format!("rendered in {:.1} s", took.as_secs_f64()) }),
+            Render::Done { took } => parts.push(if took < Duration::from_millis(5) {
+                "from cache".into()
+            } else {
+                format!("rendered in {:.1} s", took.as_secs_f64())
+            }),
             Render::Failed(_) => {}
         }
         if self.mixer.status.waiting.load(Ordering::Relaxed) || self.shared.starved.load(Ordering::Relaxed) {

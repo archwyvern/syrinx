@@ -10,10 +10,10 @@ use std::thread::JoinHandle;
 
 use crate::{Error, Inspected, Meta, RenderOptions, Target};
 
-use super::mixer::{mixer_thread, MixCommand, MixForm, MixSetup, Mixer};
-use super::stem::{stem_thread, LiveStem, Stem, StemHandle, StemMessage};
+use super::mixer::{MixCommand, MixForm, MixSetup, Mixer, mixer_thread};
+use super::stem::{LiveStem, Stem, StemHandle, StemMessage, stem_thread};
 use super::whole::parallelism;
-use super::{inspect_with, spawn_v8_thread, Deadline, PREFETCH_BLOCKS};
+use super::{Deadline, PREFETCH_BLOCKS, inspect_with, spawn_v8_thread};
 
 /// Bounds how many isolates are being set up at once, per call. A layer that streams releases
 /// its slot once live, so a source with more streaming layers than cores cannot deadlock.
@@ -64,7 +64,12 @@ impl Source {
         Self::open_with(source, name, opts, Deadline::new(opts.timeout))
     }
 
-    pub(super) fn open_with(source: &str, name: &str, opts: &RenderOptions, deadline: Deadline) -> Result<Source, Error> {
+    pub(super) fn open_with(
+        source: &str,
+        name: &str,
+        opts: &RenderOptions,
+        deadline: Deadline,
+    ) -> Result<Source, Error> {
         let info = inspect_with(source, name, opts, deadline)?;
         let (sample_rate, frames) = (info.sample_rate, info.frames);
         Ok(Source { text: source.to_string(), name: name.to_string(), opts: opts.clone(), info, sample_rate, frames })
@@ -138,7 +143,8 @@ impl Source {
                 let stem = stem.to_string();
                 let slots = slots.clone();
                 let failed = failed.clone();
-                let thread = spawn_v8_thread(move || stem_thread(&text, &name, &opts, deadline, &stem, &slots, &failed, tx));
+                let thread =
+                    spawn_v8_thread(move || stem_thread(&text, &name, &opts, deadline, &stem, &slots, &failed, tx));
                 (rx, thread)
             })
             .collect();
@@ -160,7 +166,10 @@ impl Source {
                     stems.push(Stem { form: StemHandle::Whole(planes), ..stem });
                 }
                 Ok(StemMessage::Live(handle)) => {
-                    stems.push(Stem { form: StemHandle::Live(LiveStem { rx, handle, thread: Some(thread), done: false }), ..stem });
+                    stems.push(Stem {
+                        form: StemHandle::Live(LiveStem { rx, handle, thread: Some(thread), done: false }),
+                        ..stem
+                    });
                 }
                 Ok(StemMessage::Fail(e)) => {
                     let _ = thread.join();
@@ -168,7 +177,8 @@ impl Source {
                 }
                 Ok(_) => {
                     let _ = thread.join();
-                    failure.get_or_insert(Error::internal(format!("layer \"{name}\" reported a block before its setup")));
+                    failure
+                        .get_or_insert(Error::internal(format!("layer \"{name}\" reported a block before its setup")));
                 }
                 // The thread saw another layer fail and never started, or died.
                 Err(_) => {
@@ -203,7 +213,9 @@ impl Source {
             let opts = self.opts.clone();
             let names = names.clone();
             let current = current.clone();
-            spawn_v8_thread(move || mixer_thread(&text, &name, &opts, deadline, names, use_default, &current, setup_tx, inbox))
+            spawn_v8_thread(move || {
+                mixer_thread(&text, &name, &opts, deadline, names, use_default, &current, setup_tx, inbox)
+            })
         };
         let form = match setup_rx.recv() {
             Ok(MixSetup::Stream) => MixForm::Stream,

@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io::{self, Write};
-use std::num::{NonZeroU32, NonZeroU8};
+use std::num::{NonZeroU8, NonZeroU32};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -321,8 +321,14 @@ fn opus(r: &Rendered, opts: &Options) -> Result<Vec<u8>, Error> {
 fn ffmpeg(path: &Path, r: &Rendered, opts: &Options) -> Result<(), Error> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-f", "f32le"])
-        .args(["-ar", &r.sample_rate.to_string(), "-ac", &r.channels.to_string(), "-i", "pipe:0"]);
+    cmd.args(["-y", "-hide_banner", "-loglevel", "error", "-f", "f32le"]).args([
+        "-ar",
+        &r.sample_rate.to_string(),
+        "-ac",
+        &r.channels.to_string(),
+        "-i",
+        "pipe:0",
+    ]);
     match ext.as_str() {
         "m4a" | "mp4" | "aac" => {
             cmd.args(["-c:a", "aac", "-b:a", &format!("{}k", opts.bitrate_kbps)]);
@@ -371,7 +377,14 @@ mod tests {
             }
         }
         Rendered {
-            meta: Meta { name: Some("tone".into()), duration: 0.5, channels, sample_rate: None, seed: 0, looping: false },
+            meta: Meta {
+                name: Some("tone".into()),
+                duration: 0.5,
+                channels,
+                sample_rate: None,
+                seed: 0,
+                looping: false,
+            },
             sample_rate: rate,
             channels,
             frames,

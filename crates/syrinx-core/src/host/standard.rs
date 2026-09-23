@@ -6,9 +6,9 @@ use std::collections::HashMap;
 
 use crate::{Error, ErrorKind, PRELUDE};
 
-use super::loader::{compile_registered, resolve_module, Loader, LOADER};
+use super::loader::{LOADER, Loader, compile_registered, resolve_module};
 use super::wrapper::run_object;
-use super::{caught_in, get, init_v8, install_standard_math, on_own_thread, PRELUDE_SPECIFIER, MAX_HEAP_BYTES};
+use super::{MAX_HEAP_BYTES, PRELUDE_SPECIFIER, caught_in, get, init_v8, install_standard_math, on_own_thread};
 
 /// The names the prelude actually exports at run time.
 ///

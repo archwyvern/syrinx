@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use syrinx_core::{inspect, mix_from, render, render_each, ErrorKind, RenderOptions, Target};
+use syrinx_core::{ErrorKind, RenderOptions, Target, inspect, mix_from, render, render_each};
 
 const SINE: &str = r#"
 import { Osc, render } from "./framework/dsp.js";
@@ -231,8 +231,7 @@ export default function (ctx) {
     let entry = in_project("x.syr");
     let direct = render(src, &entry, &opts()).unwrap();
     let each = render_each(src, &entry, &opts(), &[]).unwrap();
-    let supplied: Vec<(String, Vec<f32>)> =
-        each.iter().map(|r| (r.stem.clone().unwrap(), r.samples.clone())).collect();
+    let supplied: Vec<(String, Vec<f32>)> = each.iter().map(|r| (r.stem.clone().unwrap(), r.samples.clone())).collect();
     let mixed = mix_from(src, &entry, &opts(), &supplied).unwrap();
     assert_eq!(direct.samples, mixed.samples);
 
@@ -333,8 +332,13 @@ fn api_is_required_and_exactly_four() {
     assert_eq!(missing.kind, ErrorKind::Contract);
     assert_eq!(missing.message, "meta.api is required: this compiler provides api 4 and accepts 4 to 4");
     for (api, shown) in [("3", "3"), ("5", "5"), ("4.5", "4.5"), ("\"4\"", "4"), ("null", "null")] {
-        let e = inspect(&format!("export const meta = {{ api: {api}, duration: 0.01 }};{body}"), "x.syr", &opts()).unwrap_err();
-        assert_eq!(e.message, format!("source declares meta.api {shown} but this compiler provides api 4 and accepts 4 to 4"), "api {api}");
+        let e = inspect(&format!("export const meta = {{ api: {api}, duration: 0.01 }};{body}"), "x.syr", &opts())
+            .unwrap_err();
+        assert_eq!(
+            e.message,
+            format!("source declares meta.api {shown} but this compiler provides api 4 and accepts 4 to 4"),
+            "api {api}"
+        );
     }
 }
 
@@ -351,20 +355,26 @@ fn seeds_are_unsigned_32_bit_integers() {
         ("NaN", None),
         ("Infinity", None),
     ] {
-        let r = inspect(&format!("export const meta = {{ api: 4, duration: 0.01, seed: {seed} }};{body}"), "x.syr", &opts());
+        let r = inspect(
+            &format!("export const meta = {{ api: 4, duration: 0.01, seed: {seed} }};{body}"),
+            "x.syr",
+            &opts(),
+        );
         match (accepted, r) {
             (Some(want), Ok(info)) => assert_eq!(info.meta.seed, want, "seed {seed}"),
             (None, Err(e)) => assert_eq!(e.message, "meta.seed must be an integer in [0, 4294967295]", "seed {seed}"),
             (want, got) => panic!("seed {seed}: expected {want:?}, got {got:?}"),
         }
     }
-    let e = inspect(&format!("export const meta = {{ api: 4, duration: 0.01, seed: \"7\" }};{body}"), "x.syr", &opts()).unwrap_err();
+    let e = inspect(&format!("export const meta = {{ api: 4, duration: 0.01, seed: \"7\" }};{body}"), "x.syr", &opts())
+        .unwrap_err();
     assert_eq!(e.message, "meta.seed must be a number");
 }
 
 #[test]
 fn inspect_computes_the_geometry() {
-    let src = "export const meta = { api: 4, duration: 0.5, sampleRate: 44100 };\nexport const stems = { a: (ctx) => [] };";
+    let src =
+        "export const meta = { api: 4, duration: 0.5, sampleRate: 44100 };\nexport const stems = { a: (ctx) => [] };";
     let info = inspect(src, "x.syr", &opts()).unwrap();
     assert_eq!((info.sample_rate, info.frames), (44_100, 22_050));
     let forced = inspect(src, "x.syr", &RenderOptions { sample_rate: Some(8_000), ..opts() }).unwrap();
@@ -457,7 +467,8 @@ export default function (ctx) { for (;;) {} }
 /// would take batches x budget instead of one budget.
 #[test]
 fn the_timeout_is_a_budget_for_the_whole_render() {
-    let mut src = String::from("export const meta = { api: 4, duration: 0.01, channels: 1 };\nexport const stems = {\n");
+    let mut src =
+        String::from("export const meta = { api: 4, duration: 0.01, channels: 1 };\nexport const stems = {\n");
     for i in 0..256 {
         src.push_str(&format!("  s{i}(ctx) {{ for (;;) {{}} }},\n"));
     }
@@ -479,12 +490,18 @@ fn contract_errors() {
     let cases: &[(&str, &str)] = &[
         ("export const stems = { a: (ctx) => [] };", "meta"),
         ("export const meta = { api: 4, duration: 0.01 };", "`stems` export"),
-        ("export const meta = { api: 4, duration: 0.01 };\nexport default function (ctx) { return []; }", "`stems` export"),
+        (
+            "export const meta = { api: 4, duration: 0.01 };\nexport default function (ctx) { return []; }",
+            "`stems` export",
+        ),
         ("export const meta = { api: 4, duration: 0.01 };\nexport const stems = 5;", "object of functions"),
         ("export const meta = { api: 4, duration: 0.01 };\nexport const stems = {};", "is empty"),
         ("export const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: 5 };", "is not a function"),
         ("export const meta = { api: 4, duration: -1 };\nexport const stems = { a: (ctx) => [] };", "duration"),
-        ("export const meta = { api: 4, duration: 0.01, channels: 3 };\nexport const stems = { a: (ctx) => [] };", "channels"),
+        (
+            "export const meta = { api: 4, duration: 0.01, channels: 3 };\nexport const stems = { a: (ctx) => [] };",
+            "channels",
+        ),
         (
             "export const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => [new Float32Array(1), new Float32Array(1)] };",
             "channel",
@@ -511,7 +528,11 @@ fn imports_relative_modules_and_reports_them() {
         "import { Osc } from \"../framework/dsp.js\";\nexport function tone(sr, f) { const o = Osc.sine(sr); return () => o.next(f); }\nexport const GAIN = 0.25;\n",
     )
     .unwrap();
-    std::fs::write(dir.join("lib/util.js"), "export { GAIN } from \"./tone.js\";\nexport const twice = (x) => x * 2;\n").unwrap();
+    std::fs::write(
+        dir.join("lib/util.js"),
+        "export { GAIN } from \"./tone.js\";\nexport const twice = (x) => x * 2;\n",
+    )
+    .unwrap();
     let entry = dir.join("beep.syr");
     let src = r#"
 import { render } from "./framework/dsp.js";
@@ -551,12 +572,24 @@ fn import_outside_root_is_rejected() {
     let src = "import { x } from \"../secret.js\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: () => [x] };";
     std::fs::write(&entry, src).unwrap();
 
-    let e = render(src, entry.to_str().unwrap(), &RenderOptions { root: Some(dir.join("project")), ..opts() }).unwrap_err();
+    let e =
+        render(src, entry.to_str().unwrap(), &RenderOptions { root: Some(dir.join("project")), ..opts() }).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Compile);
     let project = std::fs::canonicalize(dir.join("project")).unwrap();
     let secret = std::fs::canonicalize(dir.join("secret.js")).unwrap();
-    assert_eq!(e.message, format!("cannot import \"../secret.js\": {} is outside the project root {}", secret.display(), project.display()));
-    assert_eq!(e.file.as_deref(), Some(project.join("a.syr").to_str().unwrap()), "the error names the module that imported");
+    assert_eq!(
+        e.message,
+        format!(
+            "cannot import \"../secret.js\": {} is outside the project root {}",
+            secret.display(),
+            project.display()
+        )
+    );
+    assert_eq!(
+        e.file.as_deref(),
+        Some(project.join("a.syr").to_str().unwrap()),
+        "the error names the module that imported"
+    );
 
     // Without a root it is allowed.
     assert!(render(src, entry.to_str().unwrap(), &opts()).is_ok());
@@ -569,7 +602,10 @@ fn bare_specifiers_and_missing_files_are_errors() {
     let bare = "import x from \"lodash\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: () => [] };";
     std::fs::write(&entry, bare).unwrap();
     let e = render(bare, entry.to_str().unwrap(), &opts()).unwrap_err();
-    assert_eq!((e.kind, e.message.as_str()), (ErrorKind::Compile, "cannot import \"lodash\": only \"syrinx\" and relative paths can be imported"));
+    assert_eq!(
+        (e.kind, e.message.as_str()),
+        (ErrorKind::Compile, "cannot import \"lodash\": only \"syrinx\" and relative paths can be imported")
+    );
 
     let missing = "import x from \"./nope.js\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: () => [] };";
     let e = render(missing, entry.to_str().unwrap(), &opts()).unwrap_err();

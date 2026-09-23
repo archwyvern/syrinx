@@ -5,7 +5,9 @@
 
 use anyhow::{Context, Result};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
-use rubato::{Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use rubato::{
+    Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 pub struct Resample {
     inner: Option<Async<f32>>,
@@ -30,8 +32,15 @@ impl Resample {
                 window: WindowFunction::BlackmanHarris2,
             };
             Some(
-                Async::<f32>::new_sinc(to_rate as f64 / from_rate as f64, 1.0, &params, chunk_frames, channels, FixedAsync::Input)
-                    .with_context(|| format!("resampler {from_rate} -> {to_rate} Hz"))?,
+                Async::<f32>::new_sinc(
+                    to_rate as f64 / from_rate as f64,
+                    1.0,
+                    &params,
+                    chunk_frames,
+                    channels,
+                    FixedAsync::Input,
+                )
+                .with_context(|| format!("resampler {from_rate} -> {to_rate} Hz"))?,
             )
         };
         let out_frames = inner.as_ref().map_or(chunk_frames, |r| r.output_frames_max());
@@ -66,14 +75,16 @@ impl Resample {
         };
         let buffer_in = InterleavedSlice::new(source, self.channels, self.chunk_frames).context("input adapter")?;
         let capacity = self.out.len() / self.channels;
-        let mut buffer_out = InterleavedSlice::new_mut(&mut self.out, self.channels, capacity).context("output adapter")?;
+        let mut buffer_out =
+            InterleavedSlice::new_mut(&mut self.out, self.channels, capacity).context("output adapter")?;
         let indexing = Indexing {
             input_offset: 0,
             output_offset: 0,
             partial_len: partial.then_some(frames),
             active_channels_mask: None,
         };
-        let (_, out_frames) = inner.process_into_buffer(&buffer_in, &mut buffer_out, Some(&indexing)).context("resampling")?;
+        let (_, out_frames) =
+            inner.process_into_buffer(&buffer_in, &mut buffer_out, Some(&indexing)).context("resampling")?;
         Ok(&self.out[..out_frames * self.channels])
     }
 

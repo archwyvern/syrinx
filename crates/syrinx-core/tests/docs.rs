@@ -26,16 +26,58 @@ fn the_core_and_the_framework_are_exactly_these() {
     };
     assert_eq!(docs.modules[0].module, "syrinx");
     let mut core = vec![
-        "BLOCK_FRAMES", "Context", "Meta", "MixContext", "MixStream", "Output", "PRELUDE_VERSION", "Random", "Source",
-        "StemContext", "Stems", "Stream", "hash", "inBlock",
+        "BLOCK_FRAMES",
+        "Context",
+        "Meta",
+        "MixContext",
+        "MixStream",
+        "Output",
+        "PRELUDE_VERSION",
+        "Random",
+        "Source",
+        "StemContext",
+        "Stems",
+        "Stream",
+        "hash",
+        "inBlock",
     ];
     core.sort_unstable();
     assert_eq!(names(0), core);
     assert_eq!(docs.modules[1].module, "framework/dsp.js");
     let mut dsp = vec![
-        "Allpass", "BiquadType", "Biquad", "BlepOsc", "Comb", "Delay", "Env", "Envelope", "Noise", "OnePole", "Osc", "Phasor",
-        "Processor", "Reverb", "Shape", "Svf", "TAU", "clamp", "db", "fade", "filter", "fold", "gain", "hardclip", "lerp",
-        "mix", "mtof", "normalize", "pan", "place", "render", "softclip", "stream",
+        "Allpass",
+        "BiquadType",
+        "Biquad",
+        "BlepOsc",
+        "Comb",
+        "Delay",
+        "Env",
+        "Envelope",
+        "Noise",
+        "OnePole",
+        "Osc",
+        "Phasor",
+        "Processor",
+        "Reverb",
+        "Shape",
+        "Svf",
+        "TAU",
+        "clamp",
+        "db",
+        "fade",
+        "filter",
+        "fold",
+        "gain",
+        "hardclip",
+        "lerp",
+        "mix",
+        "mtof",
+        "normalize",
+        "pan",
+        "place",
+        "render",
+        "softclip",
+        "stream",
     ];
     dsp.sort_unstable();
     assert_eq!(names(1), dsp);

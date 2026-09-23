@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
-use crate::{Block, Error, RenderOptions, BLOCK_FRAMES};
+use crate::{BLOCK_FRAMES, Block, Error, RenderOptions};
 
 use super::source::Slots;
-use super::wrapper::{block_len, interleave, pull_block, stem_setup, StemForm};
-use super::{geometry, with_source, Deadline};
+use super::wrapper::{StemForm, block_len, interleave, pull_block, stem_setup};
+use super::{Deadline, geometry, with_source};
 
 pub(super) enum StemMessage {
     Whole(Vec<Vec<f32>>),
@@ -51,7 +51,8 @@ pub(super) fn stem_thread(
                 }
                 let mut offset = 0;
                 while offset < frames {
-                    let planes = pull_block(scope, guard, opts.timeout, driver, offset, frames, meta.channels, None, &what)?;
+                    let planes =
+                        pull_block(scope, guard, opts.timeout, driver, offset, frames, meta.channels, None, &what)?;
                     if tx.send(StemMessage::Block(planes)).is_err() {
                         // The consumer is gone; nothing to compute for.
                         return Ok(());
