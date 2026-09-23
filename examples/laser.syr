@@ -1,9 +1,9 @@
 // A short sci-fi laser: pitch sweep on a band-limited saw, a touch of noise, tight envelope.
 // One layer: nothing here is worth auditioning apart from the rest of it.
-import { BlepOsc, Osc, Noise, Biquad, Env, render, filter, normalize, softclip } from "syrinx";
+import { BlepOsc, Osc, Noise, Biquad, Env, render, filter, normalize, softclip } from "../framework/dsp.js";
 import { crack } from "./lib/space.js";
 
-export const meta = { name: "laser", duration: 0.35, channels: 1, seed: 7 };
+export const meta = { api: 4, name: "laser", duration: 0.35, channels: 1, seed: 7 };
 
 export const stems = {
   laser(ctx) {

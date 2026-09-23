@@ -11,9 +11,10 @@
 // blocks, its level is a fixed gain rather than a normalize, because a stream cannot see its
 // peak. Reading ctx.stems here would make it a whole-buffer master; the blocks arrive as the
 // third argument instead.
-import { Osc, Noise, Env, Biquad, OnePole, stream, render, normalize, softclip, hash, mix, gain, filter } from "syrinx";
+import { hash } from "syrinx";
+import { Osc, Noise, Env, Biquad, OnePole, stream, render, normalize, softclip, mix, gain, filter } from "../framework/dsp.js";
 
-export const meta = { name: "beacon", duration: 3, channels: 2, seed: 9 };
+export const meta = { api: 4, name: "beacon", duration: 3, channels: 2, seed: 9 };
 
 const PING_EVERY = 0.5;
 

@@ -5,8 +5,9 @@ right.
 
 This document is normative. A requirement is marked **Must.**, a prohibition **May not.**, and an
 explanation that is not itself a requirement **Note.** Everything else is commentary. The API
-reference it cites is generated from the declarations (`prelude/syrinx.d.ts`) into
-[`docs/API.md`](docs/API.md) and `docs/syrinx-docs.json`; nothing in it is written by hand.
+reference it cites is generated from the declarations (`prelude/syrinx.d.ts` for the core and the
+framework's own) into [`docs/API.md`](docs/API.md) and `docs/syrinx-docs.json`; nothing in it is
+written by hand. This text is the standard syrinx 1.0.0 implements: contract version 4.
 
 <a id="scope"></a>
 
@@ -38,10 +39,10 @@ Comparison is made on raw floats and never on a quantised form. A 16-bit convers
 difference below roughly 3×10<sup>-5</sup>, which is ample room for two hosts to disagree while
 appearing to agree.
 
-The standard has been implemented in three languages, on three engines. The Rust host is the
-reference, and it generates the API reference this document cites. The JavaScript hosts -- one for
-Node, one for a web page -- share one reading of the contract, and a third host is written in C#.
-They are compared against each other automatically rather than assumed to match.
+The Rust host is the reference, and it generates the API reference this document cites. The
+JavaScript hosts -- one for Node, one for a web page -- share one reading of the contract. They are
+compared against the reference automatically rather than assumed to match: every example, layer by
+layer, raw float for raw float, and every contract rejection, message for message.
 
 Separate implementations are what make the agreement mean anything. Hosts that shared code would
 demonstrate only that the code is deterministic; these share nothing but the standard's own files —
@@ -51,13 +52,14 @@ the math, the run wrapper and the prelude.
 
 ## 3. The source module
 
-A source is an ES module. It imports from `"syrinx"`, exports `meta` and `stems`, and may
-default-export a function that combines the layers into the finished sound.
+A source is an ES module. It imports the core from `"syrinx"`, exports `meta` and `stems`, and
+may default-export a function that combines the layers into the finished sound. Each entry of
+`stems` is a layer.
 
 ```js title="a complete source"
-import { Osc, Env, render } from "syrinx";
+import { Osc, Env, render } from "./framework/dsp.js";
 
-export const meta = { name: "ping", duration: 0.4, channels: 1, seed: 3 };
+export const meta = { api: 4, name: "ping", duration: 0.4, channels: 1, seed: 3 };
 
 export const stems = {
   body(ctx) {
@@ -68,25 +70,32 @@ export const stems = {
 };
 ```
 
-`meta` is an object. Every field is optional except `duration`, and a field set to `undefined` is
-absent:
+The oscillator, the envelope and `render` come from the framework, which the project keeps beside
+its sources (clause 13); the core is what `"syrinx"` itself provides (clause 12).
+
+`meta` is an object. Every field is optional except `api` and `duration`, and a field set to
+`undefined` is absent:
 
 | field | type | rule |
 |---|---|---|
-| `api` | number | the contract version the source was written against; see clause 11 |
-| `name` | string | what the sound is called; a host may default it (the reference uses the file name) |
+| `api` | number | required: the contract version the source was written against, 4; see clause 11 |
+| `name` | string | what the sound is called. There is no default: a host reports an absent name as absent |
 | `duration` | number | seconds, in (0, 600] |
 | `channels` | number | 1 or 2, default 1; a mono return is duplicated when it is 2 |
 | `sampleRate` | number | an integer in [8000, 192000], default 48000; a host may override it |
-| `seed` | number | default 0; converted to an unsigned 32-bit integer and handed to every layer |
+| `seed` | number | an integer in [0, 4294967295], default 0; handed to every layer and to the mix |
 | `loop` | boolean | default false; whether the sound is meant to loop. It changes no sample |
 
 > **Must.** A host rejects a field of the wrong type or out of range as a `contract` error, checking
 > the fields in the order of this table and reporting the reference's message.
 
-> **Must.** The seed is converted as the reference converts it: truncated toward zero, with NaN and
-> anything negative becoming 0 and anything at or above 2<sup>32</sup> becoming 4294967295. A host
-> that wrapped instead (`seed >>> 0`) would hand a source a different seed.
+> **Must.** A seed is what the source wrote or it is refused: `meta.seed must be a number` when it is
+> not a number, `meta.seed must be an integer in [0, 4294967295]` when it is a number outside that
+> range or not an integer. No host converts one; a conversion is a rule every host would have to
+> reproduce exactly, for a seed nobody meant.
+
+> **Note.** A tool that needs to call a nameless sound something -- the reference CLI prints the file
+> name -- chooses that label itself. It is not part of the source's contract.
 
 > **Must.** Layer names match `/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/` and keep their declaration order. A
 > host reports a malformed name before it reports that the value is not a function.
@@ -155,9 +164,9 @@ and returned a function, it is a mix stream.
 > **May not.** A mix stream may not read `ctx.stems`. Its layers arrive as the third argument,
 > `(offset, frames, stems)`, where `stems[name]` is that layer's block.
 
-Whole-render helpers in the prelude — `normalize`, `fade`, `place` — need the entire render and
-therefore refuse to run inside a block. The flag they read is frozen and its getter closes over a
-variable private to the run wrapper, so a source cannot set it.
+Code that needs the entire render -- the framework's `normalize`, `fade` and `place`, say -- asks
+the core's `inBlock()` and refuses inside a block. The flag behind it is frozen and its getter
+closes over a variable private to the run wrapper, so a source can read it but never set it.
 
 <a id="math"></a>
 
@@ -223,6 +232,13 @@ prelude.
 > observable, because a module holding state would otherwise render differently depending on how
 > many paths reached it.
 
+> **Must.** An import that does not resolve is a `compile` error whose file is the importing module,
+> with the message for the way it failed: `cannot import "S": only "syrinx" and relative paths can
+> be imported`, `cannot import "S": no such file`, `cannot import "S": R is outside the project root
+> ROOT`, `cannot import "S": R cannot be read`, or, for any other failure to resolve the path,
+> `cannot import "S": it cannot be resolved` -- where `S` is the specifier as written and `R` and
+> `ROOT` are canonical paths.
+
 > **May not.** Dynamic `import()` is not supported. It is a limitation of the standard rather than
 > of any one host — no host installs a dynamic-import callback.
 
@@ -257,7 +273,7 @@ identically.
 | kind | code | meaning |
 |---|---|---|
 | `check` | 1 | the static determinism check rejected the source |
-| `compile` | 2 | syntax error |
+| `compile` | 2 | the module graph could not be built: a syntax error, an import that does not resolve, or an import naming an export its module lacks |
 | `runtime` | 3 | the source threw |
 | `timeout` | 4 | the source ran past its time budget and was killed |
 | `contract` | 5 | bad meta or bad return value |
@@ -267,14 +283,26 @@ identically.
 > difference, because it stays silent until the other host runs. Hosts agree on diagnostics — kind,
 > message, line and column — not merely on samples.
 
+> **Note.** One message is the engine's rather than the standard's: a link error, an import naming
+> an export its module does not have. Hosts on different engines may word it differently, and the
+> JavaScript host names the prelude `"syrinx"` in it as the reference does; the kind agrees.
+
 <a id="versioning"></a>
 
 ## 11. Versioning
 
-A source may declare `meta.api`, the contract version it was written against. A host accepts a range
-and the check is binary: in range it compiles, out of range it fails with a located error. The range
-widens rather than moves — every api-2 source is a valid api-3 source — and the field is optional,
-so a source that declares nothing is accepted at the current contract.
+A source declares `meta.api`, the contract version it was written against. The field is required,
+because a source that says which contract it was written against cannot be read as another by a
+later host. A host accepts a range, from `API_FLOOR` to `PRELUDE_VERSION`, and the check is binary:
+in range it compiles, out of range it fails with a contract error naming both.
+
+syrinx 1.0.0 implements contract 4 and accepts 4 alone: 1.0 moved everything that was not the
+standard out of the prelude and broke with every earlier contract. The range widens again only for
+an additive change, so that a source written against one contract stays valid under the next.
+
+> **Must.** A source without `meta.api` is rejected with `meta.api is required: this compiler
+> provides api P and accepts F to P`, and one outside the range with `source declares meta.api V but
+> this compiler provides api P and accepts F to P`.
 
 `syrinx info` reports the version of the implementation, the prelude's contract version
 (`PRELUDE_VERSION`), the range of `meta.api` it accepts, `BLOCK_FRAMES` and the engine. The reference
@@ -292,13 +320,13 @@ importing means, and it is the author's business, not the standard's.
 ## 12. The core module
 
 The core is what a conforming host must know about: the contract it implements, the constants it
-honours, the seeded randomness the determinism check names, and the helpers that are entangled with
-the block protocol. They are the declarations marked `@core` in `prelude/syrinx.d.ts`, listed under
-"The core module" in [`docs/API.md`](docs/API.md).
+honours, the seeded randomness the determinism check names, and the one question the block protocol
+lets a source ask. `"syrinx"` is the prelude, `prelude/prelude.js`, and it exports exactly
+`PRELUDE_VERSION`, `BLOCK_FRAMES`, `Random`, `hash` and `inBlock`; `prelude/syrinx.d.ts` declares
+them with the contract's types, listed under "The core module" in [`docs/API.md`](docs/API.md).
 
-> **Must.** `normalize`, `fade` and `place` need the whole render and refuse inside a block. They
-> read a flag the run wrapper freezes behind a getter over a private variable, so they cannot be
-> reimplemented by a source; a host must ship them.
+> **Must.** A host's `"syrinx"` exports exactly the core, and `inBlock()` is true exactly while the
+> host is computing one block of a stream -- false during a layer's setup and for a whole layer.
 
 <!-- reference: core -->
 
@@ -306,9 +334,10 @@ the block protocol. They are the declarations marked `@core` in `prelude/syrinx.
 
 ## 13. The framework
 
-Everything else the prelude currently ships — oscillators, envelopes, filters, delays, the scalar
-conveniences — is not part of this standard. It is a framework: a dependency an album project
-chooses, the way it chooses any library. It is listed under "The framework" in
+Everything else a sound is made of -- oscillators, envelopes, filters, delays, the buffer helpers,
+the arrangement engine, effects and instruments -- is not part of this standard. It is the
+framework, `framework/` in the reference implementation's repository: a library a project chooses,
+the way it chooses any library. Its primitives are listed under "The framework" in
 [`docs/API.md`](docs/API.md).
 
 > **Must.** A host never ships the framework and never evaluates it. Nothing in this section is
@@ -320,9 +349,15 @@ on the far side of that question is somebody's library, and a standard that carr
 carries it forever.
 
 The framework is developed in the same repository as the reference host — they move together and
-are tested together — but it is distributed on its own. A source that calls the framework depends on
-it as firmly as on the standard, and that dependency is tracked the same way everything else is: by
-what the source renders to, not by a number either side declares.
+are tested together — but it is its own package (`syrinx-framework`, versioned with the repository),
+distributed on its own: `syrinx framework <dir>` writes a copy into a project, with a `VERSION` file
+naming the release it came from. A source that calls the framework depends on it as firmly as on the
+standard, and that dependency is tracked the same way everything else is: by what the source
+renders to, not by a number either side declares.
+
+A framework function, once released, never changes what it renders. A better voice is a new name
+beside the old one, so that updating a project's copy can add sound but never alter a sound
+someone approved.
 
 > **Must.** An album project imports the framework by relative path, because clause 8 admits only
 > `"syrinx"` and relative specifiers. The framework therefore lives under the project root like any
@@ -334,11 +369,9 @@ what the source renders to, not by a number either side declares.
 > fourth implementation could get wrong, resolution is the likeliest, and relative paths cost one
 > directory to avoid it entirely.
 
-> **Note.** The boundary is specified here ahead of the implementation: today the prelude ships as a
-> single module and both halves are imported from `"syrinx"`. The partition is carried by the
-> declarations themselves — an `@core` tag on each core entry — and the reference implementation's
-> tests pin it, so an export added to the prelude lands in the framework unless it is deliberately
-> made core.
+> **Note.** The boundary is pinned by the reference implementation's tests: the names `"syrinx"`
+> exports, and the names the framework's `dsp.js` exports, are each a list a change to which is a
+> change to the standard, made on purpose.
 
 Bit-exactness is not relaxed here. A framework function is as binding as a core one for any source
 that calls it. The difference is only whose problem it is to ship.

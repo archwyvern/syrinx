@@ -4,9 +4,9 @@
 // The master is deliberately non-linear -- the thump and the burst are clipped TOGETHER, and the
 // reverb is fed from the clipped sum -- which is exactly the shape stems make safe to keep: the
 // layers stay linear and auditionable, and everything that has to see the sum lives here.
-import { Osc, Noise, Svf, Env, Reverb, render, filter, mix, gain, fade, normalize, softclip } from "syrinx";
+import { Osc, Noise, Svf, Env, Reverb, render, filter, mix, gain, fade, normalize, softclip } from "../framework/dsp.js";
 
-export const meta = { name: "explosion", duration: 2.5, channels: 2, seed: 42 };
+export const meta = { api: 4, name: "explosion", duration: 2.5, channels: 2, seed: 42 };
 
 export const stems = {
   thump(ctx) {

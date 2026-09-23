@@ -4,12 +4,15 @@ Renders a `.syr` sound source without the native library, so an editor can previ
 in-process: no FFI, no built game, no platform binary.
 
 ```js
-import { render, check, SYRINX_VERSION } from "syrinx";
+import { render, inspect, check, SYRINX_VERSION } from "syrinx";
 
 const sound = await render({ path: "sfx/laser.syr", root: "/path/to/project" });
-// { samples: Float32Array (interleaved), sampleRate, channels, frames,
-//   duration, loop, name, seed, dependencies, elapsedMs }
+// { samples: Float32Array (interleaved), sampleRate, channels, frames, duration, loop,
+//   name (undefined unless declared), seed, stem, stemNames, hasMix, dependencies, streaming, elapsedMs }
 ```
+
+`inspect` reads a source's declarations without rendering it; `renderEach` renders its layers
+separately; `mixFrom` runs only the mix stage over layers rendered earlier.
 
 `root` is the directory imports may not escape. Passing `null` removes the jail; an editor
 opening someone else's project should not.
@@ -17,6 +20,15 @@ opening someone else's project should not.
 A failure is a `SyrinxError` with `kind` (`check` | `compile` | `runtime` | `timeout` |
 `contract` | `internal`), `message`, and `file` / `line` / `column` when the failure was located —
 the same shape the C ABI reports, so a consumer can present both hosts identically.
+
+## Other entry points
+
+- `syrinx/browser` — the host for a web page, `open({ entry, math, run, prelude })` in a Web
+  Worker; see the repository README.
+- `syrinx/imports` — `scanImports(source)` and `rewriteImports(source, resolve)`: a module's static
+  imports found (comments skipped) and rewritten in one splice, the way the Node host loads a
+  module graph. A publisher that serves sources to a page rewrites them with this.
+- `syrinx/check` — the determinism check on its own, and `strip`.
 
 ## The Rust library is the reference
 

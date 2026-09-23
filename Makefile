@@ -7,6 +7,7 @@
 #   dist/prelude.js             the prelude, for editors and tooling
 #   dist/math.js                the standard math (evaluate before anything else)
 #   dist/run.js                 the run wrapper
+#   dist/framework/             the framework, to copy into a project
 #
 # V8 is linked statically into both binaries; the first build downloads the prebuilt V8 for the
 # host target (~100 MB, needs network), later builds do not.
@@ -49,6 +50,7 @@ dist: build
 	cp prelude/math.js $(DIST)/math.js
 	cp prelude/run.js $(DIST)/run.js
 	cp prelude/syrinx.d.ts $(DIST)/syrinx.d.ts
+	cp -r framework $(DIST)/framework
 	@echo; ls -la $(DIST)/bin $(DIST)/lib
 
 # Puts the CLI and the player on PATH (cargo's own bin directory). The shared library, header

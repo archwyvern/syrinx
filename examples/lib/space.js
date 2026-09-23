@@ -1,5 +1,5 @@
 // Shared bits for the example sounds. Plain JavaScript, imported by relative path.
-import { Noise, Env, Biquad } from "syrinx";
+import { Noise, Env, Biquad } from "../../framework/dsp.js";
 
 // A short filtered-noise transient: the "crack" at the front of a laser or a hit.
 export function crack(ctx, { seed = 0, freq = 3200, q = 4, decay = 0.0025, gain = 2 } = {}) {

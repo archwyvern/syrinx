@@ -4,8 +4,9 @@
 
 A compiler for sounds. JavaScript is the source, audio is the binary.
 
-A sound effect is a small JavaScript file. syrinx runs it inside an embedded V8 against a
-prelude of synthesis primitives and writes out PCM. The same source always produces the same
+A sound effect is a small JavaScript file. syrinx runs it inside an embedded V8 against a small
+core -- seeded randomness, the block protocol -- and a framework of synthesis primitives and
+instruments the project keeps beside its sources, and writes out PCM. The same source always produces the same
 bytes — sources are statically rejected if they touch anything non-deterministic — so sounds
 can live in a repo as code and be baked by a content pipeline like any other asset.
 
@@ -36,6 +37,7 @@ Requires a Rust toolchain. The first build downloads the prebuilt V8 for the hos
 | `include/syrinx.h`      | C header                                                   |
 | `prelude.js`             | the prelude (the `"syrinx"` module)                        |
 | `syrinx.d.ts`            | type declarations for editors                              |
+| `framework/`             | the framework, to copy into a project                      |
 
 ### Windows
 
@@ -122,9 +124,10 @@ syrinx play laser.syr --repeat 3             # a streaming source starts as soon
 syrinx check examples/*.syr                  # determinism check + meta, no render
 syrinx check --root sounds/ sounds/*.syr    # ... with imports jailed to sounds/
 syrinx info
-syrinx prelude                              # print the prelude (the "syrinx" module)
+syrinx framework ./framework                # copy the framework into a project (see below)
+syrinx prelude                              # print the prelude: the core module, "syrinx"
 syrinx types                                # print syrinx.d.ts for editors
-syrinx docs --out docs/syrinx-docs.json     # the prelude's API reference as JSON
+syrinx docs --out docs/syrinx-docs.json     # the API reference (core and framework) as JSON
 ```
 
 ### Output formats
@@ -161,10 +164,11 @@ a content pipeline can claim them without sniffing every `.js` file. Tell your e
 A sound is one or more named **layers**, and optionally a mix that combines them.
 
 ```js
-import { BlepOsc, Noise, Env, render, normalize, hash } from "syrinx";
+import { hash } from "syrinx";
+import { BlepOsc, Noise, Env, render, normalize } from "./framework/dsp.js";
 import { crack } from "./lib/space.js";
 
-export const meta = { name: "laser", duration: 0.35, channels: 1, seed: 7 };
+export const meta = { api: 4, name: "laser", duration: 0.35, channels: 1, seed: 7 };
 
 export const stems = {
   tick(ctx) {
@@ -186,9 +190,10 @@ export default function (ctx) {
 }
 ```
 
-`meta` — `name`, `duration` (seconds, required), `channels` (1 or 2), `sampleRate` (optional
-preference; the caller may override), `seed`, `loop` (declared seamless loop; passed through),
-`api` (contract version the source targets, 2 or 3; compile fails on anything else).
+`meta` — `api` (the contract the source was written against: 4, required), `name` (no default: a
+tool that needs a label picks one), `duration` (seconds, required), `channels` (1 or 2),
+`sampleRate` (optional preference; the caller may override), `seed` (an integer in
+[0, 4294967295]), `loop` (declared seamless loop; passed through).
 
 `stems` is required and non-empty. Names match `/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/` -- the leading
 letter matters, because an integer-like key sorts itself to the front of a JavaScript object and
@@ -236,18 +241,18 @@ export default function (ctx) {
 ```
 
 - **Blocks are `BLOCK_FRAMES` (4096) frames**, a constant of the standard exported by the
-  prelude, so a block boundary can never leak into the samples on one host and not another.
+  core, so a block boundary can never leak into the samples on one host and not another.
   The last block is shorter. A block's return goes through the same rules as a whole return
   (mono duplicated when `channels` is 2, the plane count checked) but its length must be exactly
   the block's: a wrong length is an error naming the block, because padding it would hide an
   inclusive bound or a fixed-size scratch buffer.
 - **Closure state persists between blocks.** Oscillators, filters and delay lines are made in
   setup and advanced by every block; that is what makes a stream causal.
-- **Nothing non-causal.** `normalize` needs the peak of the whole render, `fade` its end,
-  `place` the whole timeline; inside a block all three throw, naming the fix (a limiter or a
-  fixed gain; a gain from the absolute time with `Env.line` and `Env.gate`; a copy into the
-  block from `round(at * sr) - offset`). A look-ahead effect carries its own delay line. In
-  setup they stay legal.
+- **Nothing non-causal.** The framework's `normalize` needs the peak of the whole render, `fade`
+  its end, `place` the whole timeline; inside a block all three throw, naming the fix (a limiter or
+  a fixed gain; a gain from the absolute time with `Env.line` and `Env.gate`; a copy into the
+  block from `round(at * sr) - offset`). They know by asking the core's `inBlock()`, which your own
+  code may ask too. A look-ahead effect carries its own delay line. In setup they stay legal.
 - **The mix stage is classified by a probe.** The host calls the default export once with a
   `ctx.stems` whose reads are recorded and refused. It read them: it is a whole-buffer mix and
   runs, in a fresh isolate, over the whole layers once they exist -- so a whole-buffer master
@@ -257,10 +262,9 @@ export default function (ctx) {
 - **A mixer may be restarted** at a block boundary (`Mixer::restart` in the library, what the
   player does to seek); its first blocks then differ from the canonical render until its state
   warms. The canonical render is the sequence from frame 0.
-- Every api-2 source is an api-3 source unchanged, and renders the same bytes. `meta.api`
-  accepts 2 and 3. Port a master before its layers: a mix stream over whole layers works, a
-  whole-buffer master over streaming layers works, so either order renders -- but only the
-  first order streams the moment it is done.
+- Port a master before its layers: a mix stream over whole layers works, a whole-buffer master
+  over streaming layers works, so either order renders -- but only the first order streams the
+  moment it is done.
 
 ### Why layers
 
@@ -282,20 +286,39 @@ sum. One file holding several unrelated sounds is a different thing that does no
 
 ### Imports
 
-`"syrinx"` is the prelude. Relative paths (`./lib/x.js`, `../shared/y.syr`) are files, resolved
+`"syrinx"` is the core. Relative paths (`./lib/x.js`, `../shared/y.syr`) are files, resolved
 from the importing module and jailed to `--root` when one is given (the engine passes its
 project root). Nothing else can be imported: no bare specifiers, no `node_modules`, no URLs. A
 module imported twice is one instance. Every module in the graph goes through the determinism
 check, and the compiler reports the closure (`syrinx check` prints it; `syrinx_render_dependency`
-in the C API) so a cache can key on it.
+in the C API) so a cache can key on it. An import that does not resolve is a compile error naming
+the module that asked.
 
-The prelude (`syrinx prelude`, types in `syrinx types`) provides oscillators (`Osc`, `BlepOsc`,
-`Phasor`), seeded `Random` and `Noise` (white/pink/brown), envelopes as functions of time
-(`Env.ad/adsr/exp/line/sweep/gate/points`), filters (`OnePole`, `Biquad` RBJ cookbook, `Svf`),
-delay parts (`Delay`, `Comb`, `Allpass`, a small `Reverb` built from them), buffer helpers
-(`render`, `stream`, `mix`, `gain`, `normalize`, `fade`, `pan`, `place`, `filter`), scalar
-helpers (`clamp`, `lerp`, `db`, `mtof`, `softclip`, `hardclip`, `fold`, `hash`) and the
-constants `PRELUDE_VERSION` and `BLOCK_FRAMES`.
+The core (`syrinx prelude`, types in `syrinx types`) is small on purpose: `PRELUDE_VERSION`,
+`BLOCK_FRAMES`, seeded `Random`, `hash` for deriving seeds, and `inBlock()`. Everything a sound is
+made of is the framework.
+
+### The framework
+
+`framework/` is a library of its own: the primitives that were the prelude until 1.0 (`dsp.js`:
+oscillators, noise, envelopes, filters, delays and reverb, the buffer helpers and the scalars),
+and on top of them the arrangement engine, effects, a mastering chain and instruments -- the
+pianos, strings, synths, drum kits and voices the Firmament album was written with. A host never
+loads it on its own account; a project takes a copy and imports it by relative path, like any of
+its own modules:
+
+```
+syrinx framework ./framework        # writes it, and framework/VERSION; run again to update
+```
+
+```js
+import { Env, render } from "./framework/dsp.js";
+import { grand } from "./framework/instruments/organic.js";
+```
+
+A released framework function never changes what it renders; a better voice gets a new name. So
+updating a project's copy can add to it without moving a sound anyone approved -- and
+`syrinx hash --check` would say so if it did. `framework/README.md` is the map.
 
 ### Hearing without ears
 
@@ -316,17 +339,18 @@ analyzer, so numbers from earlier runs carry over.
 
 ### Reference documentation
 
-`syrinx docs` turns the type declarations into JSON: groups, entries, members, signatures and
-prose. It checks the declarations against the prelude's real exports first, so documentation
-cannot quietly drift from the module — a missing or surplus declaration fails the command, and a
-test keeps the committed `docs/syrinx-docs.json` in step. The rendered reference is published at
+`syrinx docs` turns the type declarations into JSON: the core module and the framework's, each
+with its groups, entries, members, signatures and prose. It checks each module's declarations
+against its real exports first, so documentation cannot quietly drift from the code — a missing or
+surplus declaration fails the command, and a test keeps the committed `docs/syrinx-docs.json` in
+step. The rendered reference is published at
 https://docs-archwyvern.web.app/syrinx.
 
 ### Hashes as regression tests
 
 `syrinx hash` prints a BLAKE3 of each source's rendered PCM. Commit the lockfile and run
-`--check` in CI: an unintended change to a sound, a shared module or the prelude shows up as
-`changed  path`, exactly like a snapshot test. Determinism is what makes this meaningful.
+`--check` in CI: an unintended change to a sound, a shared module, the framework or the core shows
+up as `changed  path`, exactly like a snapshot test. Determinism is what makes this meaningful.
 
 ### Determinism
 
@@ -415,7 +439,10 @@ const mix = source.mixer(0);                          // a mix stream, or null f
 ```
 
 It reads the contract with the same module as the Node host (`js/contract.js`), so a source is
-accepted, refused and measured identically. What only the page can do stays with the page:
+accepted, refused and measured identically, and it refuses a runtime whose prelude is another
+contract version -- so a page may take the runtime from wherever a release says it lives. Rewriting
+a module's imports is `rewriteImports` from `syrinx/imports`, the same scan the Node host loads
+with. What only the page can do stays with the page:
 serving the files, rewriting a source's imports to URLs (once, when it is published), running
 `check()` on the text before serving it, a worker per layer, and terminating one that runs past
 its budget. `test/browser.test.js` renders every example through it and compares raw floats with
@@ -427,11 +454,16 @@ Releases are tags, `vMAJOR.MINOR.PATCH`; the package, the crates and `syrinx inf
 number. Depend on a tag rather than a branch:
 
 ```json
-"syrinx": "github:archwyvern/syrinx#v0.4.0"
+"syrinx": "github:archwyvern/syrinx#v1.0.0"
 ```
 
 A new standard -- a changed prelude, math or run wrapper -- can change what an unchanged source
 renders to, so pin the version that bakes your sounds and move it deliberately.
+
+1.0 moved everything that was not the standard out of the prelude, into the framework. A 0.x
+source moves across by taking those names from `framework/dsp.js` instead of `"syrinx"` and
+declaring `api: 4`; its samples do not change (the examples and a 215-source album workspace were
+proven byte for byte).
 
 ## Playing .syr in VLC
 
@@ -512,12 +544,14 @@ crates/syrinx-cli    the syrinx binary
 crates/syrinx-player the desktop player (egui + cpal)
 crates/syrinx-exe-resources  build-script helper: the icon and version block of the Windows executables
 prelude/math.js       the standard math: fdlibm ports replacing the engine's Math, run first
-prelude/prelude.js    the JavaScript standard library sources import as "syrinx"
+prelude/prelude.js    the core module sources import as "syrinx"
 prelude/run.js        the run wrapper every host evaluates: return value -> planes, whole or per block; the sum
 prelude/run.module.js the same, behind `export default`, for a host that can only import (a browser)
-prelude/syrinx.d.ts   its type declarations, and the source of the reference docs
+prelude/syrinx.d.ts   the core's type declarations, and a source of the reference docs
+framework/            the framework: its own package, vendored into projects (`syrinx framework`)
 js/                   the JavaScript hosts (npm package at the repo root): index.js for Node, browser.js for a
-                      page; contract.js is what both read off a source, check.js is the check
+                      page; contract.js is what both read off a source, check.js is the check, imports.js
+                      finds and rewrites a module's imports
 test/                 the JS hosts' tests: math identity vs the C reference, Node and browser host vs Rust parity
 tools/fdlibm-ref/     the vendored fdlibm C the math port is checked against (make math-golden)
 docs/syrinx-docs.json the API reference, generated from those declarations (make docs); docs/API.md renders it

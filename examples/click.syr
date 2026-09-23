@@ -1,10 +1,10 @@
 // A UI click, in the two parts every short sound has: the tick that makes it read as an event,
 // and the pitched body underneath it. `syrinx compile click.syr --stem tick` plays the part that
 // is almost always what is wrong when a click sounds weak.
-import { Osc, Env, render, normalize } from "syrinx";
+import { Osc, Env, render, normalize } from "../framework/dsp.js";
 import { crack } from "./lib/space.js";
 
-export const meta = { name: "click", duration: 0.06, channels: 1, seed: 3 };
+export const meta = { api: 4, name: "click", duration: 0.06, channels: 1, seed: 3 };
 
 export const stems = {
   tick(ctx) {
