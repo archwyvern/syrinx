@@ -4119,7 +4119,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-cli"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -4137,7 +4137,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-core"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "hound",
  "serde",
@@ -4148,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-encode"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "flacenc",
  "hound",
@@ -4161,21 +4161,21 @@ dependencies = [
 
 [[package]]
 name = "syrinx-exe-resources"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "winresource",
 ]
 
 [[package]]
 name = "syrinx-ffi"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "syrinx-core",
 ]
 
 [[package]]
 name = "syrinx-player"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "blake3",

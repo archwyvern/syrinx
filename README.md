@@ -390,6 +390,46 @@ importable; a module imported twice is one instance. The hosts in this repositor
 Rust library (`crates/syrinx-core`) and the JavaScript package (`js/`); neither re-implements
 any of these files, and a new host should not either -- embed them verbatim.
 
+### In a browser
+
+`syrinx/browser` is the host for a web page. A page cannot read files or evaluate strings, so it
+is handed URLs and imports them in the standard's order: `prelude/math.js` first, then the run
+wrapper as a module (`prelude/run.module.js`, which is `run.js` behind `export default`, pinned
+byte for byte by a test), then the prelude, then the source:
+
+```js
+import { open } from "syrinx/browser";
+
+// in a Web Worker
+const source = await open({
+  math: "/syrinx/math.js",
+  run: "/syrinx/run.module.js",
+  prelude: "/syrinx/prelude.js",
+  entry: "/sounds/laser.js",   // its imports already rewritten to URLs, "syrinx" to `prelude`
+});
+const layer = source.stem(source.names[0]);          // a driver per block, or whole planes
+const mix = source.mixer(0);                          // a mix stream, or null for a whole-buffer mix
+```
+
+It reads the contract with the same module as the Node host (`js/contract.js`), so a source is
+accepted, refused and measured identically. What only the page can do stays with the page:
+serving the files, rewriting a source's imports to URLs (once, when it is published), running
+`check()` on the text before serving it, a worker per layer, and terminating one that runs past
+its budget. `test/browser.test.js` renders every example through it and compares raw floats with
+the CLI.
+
+## Versions
+
+Releases are tags, `vMAJOR.MINOR.PATCH`; the package, the crates and `syrinx info` carry the same
+number. Depend on a tag rather than a branch:
+
+```json
+"syrinx": "github:archwyvern/syrinx#v0.4.0"
+```
+
+A new standard -- a changed prelude, math or run wrapper -- can change what an unchanged source
+renders to, so pin the version that bakes your sounds and move it deliberately.
+
 ## Playing .syr in VLC
 
 `vlc/` holds a VLC 3 demux module. It compiles the source with `libsyrinx` when the file is
@@ -471,9 +511,11 @@ crates/syrinx-exe-resources  build-script helper: the icon and version block of 
 prelude/math.js       the standard math: fdlibm ports replacing the engine's Math, run first
 prelude/prelude.js    the JavaScript standard library sources import as "syrinx"
 prelude/run.js        the run wrapper every host evaluates: return value -> planes, whole or per block; the sum
+prelude/run.module.js the same, behind `export default`, for a host that can only import (a browser)
 prelude/syrinx.d.ts   its type declarations, and the source of the reference docs
-js/                   the JavaScript host (npm package at the repo root); js/check.js is the check
-test/                 the JS host's tests: math identity vs the C reference, host vs Rust parity
+js/                   the JavaScript hosts (npm package at the repo root): index.js for Node, browser.js for a
+                      page; contract.js is what both read off a source, check.js is the check
+test/                 the JS hosts' tests: math identity vs the C reference, Node and browser host vs Rust parity
 tools/fdlibm-ref/     the vendored fdlibm C the math port is checked against (make math-golden)
 docs/syrinx-docs.json the API reference, generated from those declarations
 include/syrinx.h     C header

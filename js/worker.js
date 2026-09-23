@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { parentPort, workerData } from "node:worker_threads";
 import { check, strip } from "./check.js";
+import { ContractError, geometry, readMeta, readStems } from "./contract.js";
 
 // The standard math goes in FIRST, in this worker's own realm, before the module graph is even
 // read: a module compiled before it would still see the engine's Math. It is a classic script,
@@ -164,44 +165,6 @@ async function load(entryPath, entrySource, root, dependencies, cache) {
   return url;
 }
 
-/**
- * Stem names, in declaration order, with the same grammar and the same messages as the Rust host
- * (`read_stems` in host.rs). The order of the checks matters as much as their text: both hosts
- * report a bad NAME before they report that its value is not a function.
- */
-function readStems(module, sourcePath) {
-  const stems = module.stems;
-  if (stems === undefined) {
-    return {
-      failure: fail(
-        "contract",
-        "source has no `stems` export; a sound is one or more named layers: export const stems = { name(ctx) { ... } }",
-        sourcePath),
-    };
-  }
-  if (stems === null || typeof stems !== "object") {
-    return { failure: fail("contract", "`stems` must be an object of functions", sourcePath) };
-  }
-  const names = Object.keys(stems);
-  for (const name of names) {
-    // The leading letter is load-bearing: an integer-like key sorts itself to the front of a
-    // JavaScript object, which would silently change the order the layers are summed in.
-    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(name)) {
-      return {
-        failure: fail("contract",
-          `stem name "${name}" must start with a letter and contain only letters, digits, _ . -`, sourcePath),
-      };
-    }
-    if (typeof stems[name] !== "function") {
-      return { failure: fail("contract", `stem "${name}" is not a function`, sourcePath) };
-    }
-  }
-  if (names.length === 0) {
-    return { failure: fail("contract", "`stems` is empty; declare at least one layer", sourcePath) };
-  }
-  return { stems, names };
-}
-
 /** Loads the module graph and validates what every mode needs. */
 async function prepare() {
   const { sourcePath, source, root, sampleRate } = workerData;
@@ -213,29 +176,19 @@ async function prepare() {
     return { failure: fail(err.kind ?? "compile", err.message, err.file ?? sourcePath, err.line ?? 0, err.column ?? 0) };
   }
 
-  const meta = module.meta;
-  if (!meta || typeof meta !== "object") {
-    return { failure: fail("contract", "source has no `export const meta = { ... }`", sourcePath) };
+  // The contract is read by the module every host shares (contract.js): meta, then the layers,
+  // then the geometry, with host.rs's messages.
+  let meta, read, geo;
+  try {
+    const { PRELUDE_VERSION } = await import(workerData.preludeUrl);
+    meta = readMeta(module, PRELUDE_VERSION);
+    read = readStems(module);
+    geo = geometry(meta, sampleRate);
+  } catch (err) {
+    if (err instanceof ContractError) return { failure: fail("contract", err.message, sourcePath) };
+    throw err;
   }
-  // Verbatim from host.rs `read_meta`: api 3 is additive over 2, so both are accepted (API_FLOOR
-  // is 2 in lib.rs); 1, a default export and no layers, is not.
-  const API_FLOOR = 2;
-  const { PRELUDE_VERSION } = await import(workerData.preludeUrl);
-  if (meta.api !== undefined && !(Number.isInteger(meta.api) && meta.api >= API_FLOOR && meta.api <= PRELUDE_VERSION)) {
-    return {
-      failure: fail("contract",
-        `source declares meta.api ${meta.api} but this compiler provides api ${PRELUDE_VERSION} and accepts ${API_FLOOR} to ${PRELUDE_VERSION}`,
-        sourcePath),
-    };
-  }
-
-  const read = readStems(module, sourcePath);
-  if (read.failure) return read;
-
-  // Verbatim from host.rs `geometry`: an explicit rate wins, then the source's own, then 48 kHz.
-  const rate = sampleRate || meta.sampleRate || 48000;
-  const frames = Math.round(meta.duration * rate);
-  if (frames === 0) return { failure: fail("contract", "meta.duration rounds to zero frames", sourcePath) };
+  const { rate, frames } = geo;
 
   return {
     module,
@@ -244,7 +197,7 @@ async function prepare() {
     names: read.names,
     rate,
     frames,
-    channels: meta.channels ?? 1,
+    channels: geo.channels,
     dependencies: [...dependencies],
   };
 }
