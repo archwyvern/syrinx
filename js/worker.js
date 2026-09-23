@@ -208,8 +208,8 @@ function declared(prepared) {
     ok: true,
     name: prepared.meta.name ?? "",
     duration: prepared.meta.duration,
-    seed: prepared.meta.seed >>> 0,
-    loop: prepared.meta.loop === true,
+    seed: prepared.meta.seed,
+    loop: prepared.meta.loop,
     sampleRate: prepared.rate,
     channels: prepared.channels,
     frames: prepared.frames,
@@ -242,7 +242,7 @@ async function main() {
     let streaming;
     try {
       const result = run.stem(prepared.stems[stem], prepared.rate, prepared.frames, prepared.meta.duration,
-        prepared.meta.seed >>> 0, prepared.channels, stem);
+        prepared.meta.seed, prepared.channels, stem);
       // A layer that streams is drained here, block by block, into whole planes: the same blocks
       // the Rust host pulls, in the same order, so the same bytes.
       streaming = typeof result === "function";
@@ -266,7 +266,7 @@ async function main() {
     }
     const fn = useDefault ? prepared.module.default : null;
     const what = useDefault ? "the default export" : "the mix";
-    const args = [prepared.rate, prepared.frames, prepared.meta.duration, prepared.meta.seed >>> 0, prepared.channels, 0];
+    const args = [prepared.rate, prepared.frames, prepared.meta.duration, prepared.meta.seed, prepared.channels, 0];
     let planes;
     let streaming = false;
     try {

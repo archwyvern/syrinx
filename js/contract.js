@@ -16,17 +16,64 @@ export class ContractError extends Error {
   }
 }
 
-/** The source's `meta`, checked against the contract range this prelude provides. */
+/**
+ * The source's `meta`, validated field by field exactly as the Rust host's `read_meta`: the same
+ * checks, in the same order, with the same messages. A field set to `undefined` counts as absent,
+ * as it does there.
+ *
+ * Returns the fields the host uses, normalised: `seed` becomes an unsigned 32-bit integer the way
+ * the reference converts it -- a saturating cast (`f64 as u32`: truncated toward zero, NaN and
+ * anything negative 0, anything too large 4294967295), NOT `>>> 0`, which wraps; two hosts
+ * converting a seed differently hand a source two different seeds.
+ */
 export function readMeta(module, preludeVersion) {
   const meta = module.meta;
-  if (!meta || typeof meta !== "object") {
-    throw new ContractError("source has no `export const meta = { ... }`");
+  if (meta === undefined) throw new ContractError("source has no `export const meta = { ... }`");
+  if (meta === null || (typeof meta !== "object" && typeof meta !== "function")) {
+    throw new ContractError("`meta` is not an object");
   }
-  if (meta.api !== undefined && !(Number.isInteger(meta.api) && meta.api >= API_FLOOR && meta.api <= preludeVersion)) {
-    throw new ContractError(
-      `source declares meta.api ${meta.api} but this compiler provides api ${preludeVersion} and accepts ${API_FLOOR} to ${preludeVersion}`);
+  const field = (key) => (meta[key] === undefined ? undefined : meta[key]);
+
+  const api = field("api");
+  if (api !== undefined) {
+    const n = typeof api === "number" ? api : -1;
+    if (!(n >= API_FLOOR && n <= preludeVersion) || !Number.isInteger(n)) {
+      throw new ContractError(
+        `source declares meta.api ${String(api)} but this compiler provides api ${preludeVersion} and accepts ${API_FLOOR} to ${preludeVersion}`);
+    }
   }
-  return meta;
+  const name = field("name");
+  if (name !== undefined && typeof name !== "string") throw new ContractError("meta.name must be a string");
+  const duration = field("duration");
+  if (duration === undefined) throw new ContractError("meta.duration is required (seconds)");
+  if (typeof duration !== "number") throw new ContractError("meta.duration must be a number of seconds");
+  if (!(Number.isFinite(duration) && duration > 0 && duration <= 600)) {
+    throw new ContractError("meta.duration must be in (0, 600] seconds");
+  }
+  const channels = field("channels") === undefined ? 1 : field("channels");
+  if (typeof channels !== "number" || (channels !== 1 && channels !== 2)) {
+    throw new ContractError("meta.channels must be 1 or 2");
+  }
+  const sampleRate = field("sampleRate");
+  if (sampleRate !== undefined) {
+    if (typeof sampleRate !== "number") throw new ContractError("meta.sampleRate must be a number");
+    if (!(sampleRate >= 8000 && sampleRate <= 192000) || !Number.isInteger(sampleRate)) {
+      throw new ContractError("meta.sampleRate must be an integer in [8000, 192000]");
+    }
+  }
+  const seed = field("seed") === undefined ? 0 : field("seed");
+  if (typeof seed !== "number") throw new ContractError("meta.seed must be a number");
+  const loop = field("loop") === undefined ? false : field("loop");
+  if (typeof loop !== "boolean") throw new ContractError("meta.loop must be a boolean");
+
+  return { api, name, duration, channels, sampleRate, seed: saturatingU32(seed), loop };
+}
+
+/** Rust's `f64 as u32`: NaN and negatives to 0, overflow to the maximum, otherwise truncated. */
+export function saturatingU32(x) {
+  if (!(x > 0)) return 0;
+  if (x >= 4294967295) return 4294967295;
+  return Math.trunc(x);
 }
 
 /**
@@ -60,13 +107,13 @@ export function readStems(module) {
 }
 
 /**
- * The render's geometry: an explicit rate wins, then the source's own, then 48 kHz, and the frame
- * count is round(duration * rate). A harness that computed frames any other way would show a
+ * The render's geometry, from what `readMeta` returned: an explicit rate wins, then the source's
+ * own, then 48 kHz, and the frame count is round(duration * rate). A harness that computed frames any other way would show a
  * "host difference" that is really its own arithmetic.
  */
 export function geometry(meta, sampleRate) {
   const rate = sampleRate || meta.sampleRate || 48000;
   const frames = Math.round(meta.duration * rate);
   if (frames === 0) throw new ContractError("meta.duration rounds to zero frames");
-  return { rate, frames, channels: meta.channels ?? 1 };
+  return { rate, frames, channels: meta.channels };
 }

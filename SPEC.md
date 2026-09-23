@@ -68,9 +68,25 @@ export const stems = {
 };
 ```
 
-`meta.duration` is required and is in seconds. `channels` is 1 or 2, defaulting to 1; a mono return
-is duplicated when it is 2. `sampleRate` defaults to 48000 and a host may override it. `seed` is
-handed to every layer unchanged.
+`meta` is an object. Every field is optional except `duration`, and a field set to `undefined` is
+absent:
+
+| field | type | rule |
+|---|---|---|
+| `api` | number | the contract version the source was written against; see clause 11 |
+| `name` | string | what the sound is called; a host may default it (the reference uses the file name) |
+| `duration` | number | seconds, in (0, 600] |
+| `channels` | number | 1 or 2, default 1; a mono return is duplicated when it is 2 |
+| `sampleRate` | number | an integer in [8000, 192000], default 48000; a host may override it |
+| `seed` | number | default 0; converted to an unsigned 32-bit integer and handed to every layer |
+| `loop` | boolean | default false; whether the sound is meant to loop. It changes no sample |
+
+> **Must.** A host rejects a field of the wrong type or out of range as a `contract` error, checking
+> the fields in the order of this table and reporting the reference's message.
+
+> **Must.** The seed is converted as the reference converts it: truncated toward zero, with NaN and
+> anything negative becoming 0 and anything at or above 2<sup>32</sup> becoming 4294967295. A host
+> that wrapped instead (`seed >>> 0`) would hand a source a different seed.
 
 > **Must.** Layer names match `/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/` and keep their declaration order. A
 > host reports a malformed name before it reports that the value is not a function.
@@ -83,8 +99,9 @@ each is evaluated in its own realm with its own module graph.
 
 ## 4. Contexts
 
-Every layer and the mix receive a context. It carries the sample rate, the exact frame count to
-produce, the declared duration, the seed and the channel count.
+Every layer and the mix receive a context. It carries the sample rate (`sr`), the exact frame count
+to produce (`frames`), the declared `duration`, the `seed` and the `channels` count; a layer's
+context also carries its own name (`stem`).
 
 > **Must.** `ctx.frames` is `round(duration * sr)`. A layer produces exactly that many frames per
 > plane.

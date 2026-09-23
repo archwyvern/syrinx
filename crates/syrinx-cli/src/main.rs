@@ -186,6 +186,15 @@ enum Bits {
 }
 
 fn main() -> ExitCode {
+    // Rust ignores SIGPIPE, so a reader that stops early -- `syrinx prelude | head` -- turned every
+    // println! into a panic on EPIPE. The default disposition ends the process quietly instead, as
+    // any Unix tool does; `play` likewise stops when the player it feeds goes away.
+    #[cfg(unix)]
+    // SAFETY: called first thing on the main thread, before any other thread exists or any
+    // output is written; it only restores the signal's default disposition.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

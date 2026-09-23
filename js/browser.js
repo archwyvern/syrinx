@@ -57,7 +57,7 @@ export async function open({ entry, math, run, prelude, sampleRate = 0 }) {
   }
   const { rate, frames, channels } = geo;
   const { stems, names } = read;
-  const seed = meta.seed >>> 0;
+  const seed = meta.seed;
   const duration = meta.duration;
   const mix = typeof module.default === "function" ? module.default : null;
   if (module.default !== undefined && mix === null) {
@@ -75,7 +75,7 @@ export async function open({ entry, math, run, prelude, sampleRate = 0 }) {
   return {
     meta,
     name: meta.name ?? "",
-    loop: meta.loop === true,
+    loop: meta.loop,
     names,
     sampleRate: rate,
     frames,

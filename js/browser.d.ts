@@ -22,8 +22,8 @@ export interface OpenUrls {
 export type Planes = Float32Array[];
 
 export interface OpenSource {
-  /** The source's `meta` export, as written. */
-  meta: Record<string, unknown>;
+  /** The source's `meta` as the host read it: validated, `seed` converted, absent fields undefined. */
+  meta: { api?: number; name?: string; duration: number; channels: 1 | 2; sampleRate?: number; seed: number; loop: boolean };
   name: string;
   loop: boolean;
   /** Layer names, in declaration order. */
