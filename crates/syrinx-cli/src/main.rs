@@ -146,6 +146,12 @@ enum Command {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+    /// Write the syrinx framework into a directory of the project, to import by relative path.
+    /// Files that differ are overwritten and named; nothing is deleted.
+    Framework {
+        /// Where to write it. Default: ./framework
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -495,6 +501,33 @@ fn run() -> Result<()> {
         }
         Command::Types => {
             print!("{}", syrinx_core::TYPES);
+            Ok(())
+        }
+        Command::Framework { dir } => {
+            use syrinx_core::framework::Vendored;
+            let dir = dir.unwrap_or_else(|| PathBuf::from("framework"));
+            let report = syrinx_core::framework::vendor(&dir, env!("CARGO_PKG_VERSION"))
+                .with_context(|| format!("writing the framework into {}", dir.display()))?;
+            let (mut written, mut updated) = (0, 0);
+            for (path, state) in &report {
+                match state {
+                    Vendored::Written => {
+                        written += 1;
+                        println!("wrote    {}", dir.join(path).display());
+                    }
+                    Vendored::Updated => {
+                        updated += 1;
+                        println!("updated  {}", dir.join(path).display());
+                    }
+                    Vendored::Unchanged => {}
+                }
+            }
+            println!(
+                "syrinx-framework {} in {}: {written} written, {updated} updated, {} unchanged",
+                env!("CARGO_PKG_VERSION"),
+                dir.display(),
+                report.len() - written - updated
+            );
             Ok(())
         }
         Command::Docs { out } => {
