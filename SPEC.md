@@ -7,7 +7,7 @@ This document is normative. A requirement is marked **Must.**, a prohibition **M
 explanation that is not itself a requirement **Note.** Everything else is commentary. The API
 reference it cites is generated from the declarations (`prelude/syrinx.d.ts` for the core and the
 framework's own) into [`docs/API.md`](docs/API.md) and `docs/syrinx-docs.json`; nothing in it is
-written by hand. This text is the standard syrinx 1.0.0 implements: contract version 4.
+written by hand. This text is the standard syrinx 0.9.0 implements: contract version 4.
 
 <a id="scope"></a>
 
@@ -296,7 +296,7 @@ because a source that says which contract it was written against cannot be read 
 later host. A host accepts a range, from `API_FLOOR` to `PRELUDE_VERSION`, and the check is binary:
 in range it compiles, out of range it fails with a contract error naming both.
 
-syrinx 1.0.0 implements contract 4 and accepts 4 alone: 1.0 moved everything that was not the
+syrinx 0.9.0 implements contract 4 and accepts 4 alone: 0.9 moved everything that was not the
 standard out of the prelude and broke with every earlier contract. The range widens again only for
 an additive change, so that a source written against one contract stays valid under the next.
 

@@ -205,7 +205,7 @@ test("an import that cannot resolve fails the same way on both hosts, naming the
 });
 
 test("a framework name taken from the core is a compile error naming it, on both hosts", async () => {
-  // The mistake every 0.x source makes on 1.0. The Rust host's V8 names the module as the source
+  // The mistake every 0.4 source makes on 0.9. The Rust host's V8 names the module as the source
   // wrote it; the Node host maps its own URL for the prelude back to "syrinx" so the two agree.
   const root = project({ "a.syr": 'import { Osc } from "syrinx";\n' + TONE });
   const message = "The requested module 'syrinx' does not provide an export named 'Osc'";

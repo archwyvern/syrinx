@@ -8,7 +8,7 @@
 /** The contract this host implements (PRELUDE_VERSION in lib.rs and the prelude). */
 export const PRELUDE_VERSION = 4;
 
-/** The oldest contract a source may declare (API_FLOOR in lib.rs): 1.0 broke with all before it. */
+/** The oldest contract a source may declare (API_FLOOR in lib.rs): 0.9 broke with all before it. */
 export const API_FLOOR = 4;
 
 /** A source that breaks the contract. The message is the one every host reports. */

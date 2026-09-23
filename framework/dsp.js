@@ -1,5 +1,5 @@
 // syrinx-framework: dsp -- the primitives a sound is made of. Scalars, oscillators, noise,
-// envelopes, filters, delay lines and reverb, and the buffer helpers. Until syrinx 1.0 this was
+// envelopes, filters, delay lines and reverb, and the buffer helpers. Until syrinx 0.9 this was
 // the prelude itself; the code is the same, byte for byte, so a source that takes these names from
 // here instead of from "syrinx" renders the same samples.
 //

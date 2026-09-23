@@ -40,7 +40,7 @@ bodies are not rewritten once released.
 
 | module | what | main exports |
 |---|---|---|
-| `dsp.js` | the primitives: scalars, oscillators, noise, envelopes, filters, delay lines, a small reverb, buffer helpers. Until syrinx 1.0 this was the prelude | `Osc` `BlepOsc` `Phasor` `Noise` `Env` `OnePole` `Biquad` `Svf` `Delay` `Comb` `Allpass` `Reverb` `render` `stream` `mix` `gain` `normalize` `fade` `pan` `place` `filter` `db` `mtof` `clamp` `lerp` `softclip` `hardclip` `fold` `TAU` |
+| `dsp.js` | the primitives: scalars, oscillators, noise, envelopes, filters, delay lines, a small reverb, buffer helpers. Until syrinx 0.9 this was the prelude | `Osc` `BlepOsc` `Phasor` `Noise` `Env` `OnePole` `Biquad` `Svf` `Delay` `Comb` `Allpass` `Reverb` `render` `stream` `mix` `gain` `normalize` `fade` `pan` `place` `filter` `db` `mtof` `clamp` `lerp` `softclip` `hardclip` `fold` `TAU` |
 | `music.js` | placing notes in time, into one shared stereo pair or a layer (the streaming form) | `layer` `mono` `stereo` `each` `input` `play` `sequence` `stamp` `curve` `ducker` `grid` `pattern` `gateCurve` `arp` `melody` `n` |
 | `fx.js` | a mix's effects | `Freeverb` `PingPong` `Chorus` `Phaser` `compressStereo` `limitStereo` `eqStereo` `reverbInto` `delayInto` `chorusInto` `phaserInto` `saturate` `sweepLowpass` |
 | `master.js` | the last stage: section levels, a master chain, a fade, a widener | `levels` `master` `fadeOut` `widen` |

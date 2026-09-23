@@ -27,11 +27,11 @@ pub use host::{Mixer, PRELUDE_SPECIFIER, Source, Stem, Stream};
 pub use host::{prelude_exports, standard_block_frames};
 
 /// Version of the source contract and prelude: what `meta.api` is checked against. Bump for any
-/// change to the standard, so caches keyed on it invalidate. 4 is syrinx 1.0: the prelude is the
+/// change to the standard, so caches keyed on it invalidate. 4 is syrinx 0.9: the prelude is the
 /// core alone, and every source declares the contract it was written against.
 pub const PRELUDE_VERSION: u32 = 4;
 
-/// The oldest `meta.api` this compiler accepts. 1.0 broke with everything before it, so nothing
+/// The oldest `meta.api` this compiler accepts. 0.9 broke with everything before it, so nothing
 /// older is a valid source.
 pub const API_FLOOR: u32 = 4;
 

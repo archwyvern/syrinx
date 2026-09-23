@@ -384,7 +384,7 @@ fn inspect_computes_the_geometry() {
     assert_eq!((e.kind, e.message.as_str()), (ErrorKind::Contract, "meta.duration rounds to zero frames"));
 }
 
-/// The most common mistake moving a 0.x source to 1.0: a framework name taken from the core.
+/// The most common mistake moving a 0.4 source to 0.9: a framework name taken from the core.
 #[test]
 fn a_framework_name_from_the_core_is_a_compile_error_naming_it() {
     let src = "import { Osc } from \"syrinx\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => [] };";

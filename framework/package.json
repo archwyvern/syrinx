@@ -1,6 +1,6 @@
 {
   "name": "syrinx-framework",
-  "version": "1.0.0",
+  "version": "0.9.0",
   "description": "The syrinx framework: the primitives, the arrangement engine, the effects and the instruments a sound is written with. Vendored into a project (`syrinx framework <dir>`) and imported by relative path; not part of the standard, and never required by a host.",
   "license": "MIT",
   "author": "Dominic Grostate",

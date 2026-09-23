@@ -300,7 +300,7 @@ made of is the framework.
 
 ### The framework
 
-`framework/` is a library of its own: the primitives that were the prelude until 1.0 (`dsp.js`:
+`framework/` is a library of its own: the primitives that were the prelude until 0.9 (`dsp.js`:
 oscillators, noise, envelopes, filters, delays and reverb, the buffer helpers and the scalars),
 and on top of them the arrangement engine, effects, a mastering chain and instruments -- the
 pianos, strings, synths, drum kits and voices the Firmament album was written with. A host never
@@ -454,16 +454,16 @@ Releases are tags, `vMAJOR.MINOR.PATCH`; the package, the crates and `syrinx inf
 number. Depend on a tag rather than a branch:
 
 ```json
-"syrinx": "github:archwyvern/syrinx#v1.0.0"
+"syrinx": "github:archwyvern/syrinx#v0.9.0"
 ```
 
 A new standard -- a changed prelude, math or run wrapper -- can change what an unchanged source
 renders to, so pin the version that bakes your sounds and move it deliberately.
 
-1.0 moved everything that was not the standard out of the prelude, into the framework. A 0.x
-source moves across by taking those names from `framework/dsp.js` instead of `"syrinx"` and
-declaring `api: 4`; its samples do not change (the examples and a 215-source album workspace were
-proven byte for byte).
+0.9 moved everything that was not the standard out of the prelude, into the framework. A source
+written for 0.4 or earlier moves across by taking those names from `framework/dsp.js` instead of
+`"syrinx"` and declaring `api: 4`; its samples do not change (the examples and a 215-source album
+workspace were proven byte for byte).
 
 ## Playing .syr in VLC
 
