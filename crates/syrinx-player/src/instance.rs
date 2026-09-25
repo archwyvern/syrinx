@@ -7,7 +7,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
 
 use interprocess::local_socket::{
     GenericFilePath, GenericNamespaced, ListenerOptions, Name, ToFsName, ToNsName, prelude::*,
@@ -24,9 +23,8 @@ pub struct Request {
 pub enum Acquire {
     /// A running player took the request; this process should exit.
     Handled,
-    /// This process is the player. Requests from later launches arrive on the receiver; the
-    /// slot takes the window's context once it exists so a request can wake it.
-    Listening(Receiver<Request>, Arc<Mutex<Option<egui::Context>>>),
+    /// This process is the player. Requests from later launches arrive on the receiver.
+    Listening(Receiver<Request>),
 }
 
 fn socket_name(suffix: &str) -> std::io::Result<Name<'static>> {
@@ -46,7 +44,7 @@ pub fn acquire(suffix: &str, request: Request) -> Acquire {
         Err(_) => {
             // No usable socket name on this system: run standalone, no single-instance.
             let (_, rx) = mpsc::channel();
-            return Acquire::Listening(rx, Arc::new(Mutex::new(None)));
+            return Acquire::Listening(rx);
         }
     };
     if let Ok(mut stream) = LocalSocketStream::connect(name.clone()) {
@@ -60,12 +58,10 @@ pub fn acquire(suffix: &str, request: Request) -> Acquire {
         }
     }
     let (tx, rx) = mpsc::channel();
-    let slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let listener = match ListenerOptions::new().name(name).create_sync() {
         Ok(l) => l,
-        Err(_) => return Acquire::Listening(rx, slot),
+        Err(_) => return Acquire::Listening(rx),
     };
-    let wake = Arc::clone(&slot);
     std::thread::Builder::new()
         .name("syrinx-player-instance".into())
         .spawn(move || {
@@ -83,13 +79,10 @@ pub fn acquire(suffix: &str, request: Request) -> Acquire {
                 if tx.send(request).is_err() {
                     return;
                 }
-                if let Some(ctx) = wake.lock().unwrap().as_ref() {
-                    ctx.request_repaint();
-                }
             }
         })
         .expect("spawn the instance listener");
-    Acquire::Listening(rx, slot)
+    Acquire::Listening(rx)
 }
 
 #[cfg(test)]
@@ -105,7 +98,7 @@ mod tests {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         );
         let first = acquire(&suffix, Request { replace: true, paths: vec![] });
-        let Acquire::Listening(rx, _) = first else { panic!("the first launch must listen") };
+        let Acquire::Listening(rx) = first else { panic!("the first launch must listen") };
         let request = Request { replace: false, paths: vec![PathBuf::from("/x/a.syr"), PathBuf::from("/x/b.syr")] };
         match acquire(&suffix, request.clone()) {
             Acquire::Handled => {}

@@ -29,9 +29,9 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// `files` is the closure: the source and every import, canonical. `repaint` runs when a
-    /// relevant event arrives so the window wakes up and can poll `changed`.
-    pub fn new(files: Vec<PathBuf>, repaint: impl Fn() + Send + 'static) -> Result<Watch> {
+    /// `files` is the closure: the source and every import, canonical. Whoever owns the watch
+    /// polls [`Watch::changed`].
+    pub fn new(files: Vec<PathBuf>) -> Result<Watch> {
         let set: HashSet<PathBuf> = files.iter().cloned().collect();
         let (tx, rx) = mpsc::channel();
         let handler = move |result: notify::Result<Event>| {
@@ -40,7 +40,6 @@ impl Watch {
                 && event.paths.iter().any(|p| is_relevant(p, &set))
             {
                 let _ = tx.send(Instant::now());
-                repaint();
             }
         };
         let mut watcher =
@@ -79,12 +78,6 @@ impl Watch {
             }
             _ => false,
         }
-    }
-
-    /// A change is waiting for its burst to settle: poll again soon.
-    pub fn pending(&self) -> bool {
-        self.drain();
-        self.pending.lock().unwrap().is_some()
     }
 }
 
@@ -138,7 +131,7 @@ mod tests {
         let source = dir.join("a.syr");
         fs::write(&source, "one").unwrap();
         let source = source.canonicalize().unwrap();
-        let watch = Watch::new(vec![source.clone()], || {}).unwrap();
+        let watch = Watch::new(vec![source.clone()]).unwrap();
         std::thread::sleep(Duration::from_millis(200));
         assert!(!watch.changed());
 
@@ -153,7 +146,7 @@ mod tests {
         let _ = fs::read_to_string(&source).unwrap();
         fs::write(dir.join("other.txt"), "x").unwrap();
         std::thread::sleep(Duration::from_millis(500));
-        assert!(!watch.pending() && !watch.changed(), "reading the file or writing a neighbour is not a change");
+        assert!(!watch.changed(), "reading the file or writing a neighbour is not a change");
         drop(watch);
         fs::remove_dir_all(dir).unwrap();
     }

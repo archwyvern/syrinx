@@ -47,7 +47,8 @@ impl Cache {
 
     /// Removes whole track directories, oldest `meta.json` first, until the cache fits `cap`.
     /// A directory without a `meta.json` (a render that never finished) counts as oldest.
-    pub fn evict(&self, cap: u64) -> Result<()> {
+    /// `keep` (the loaded track's directory) counts towards the total but is never removed.
+    pub fn evict(&self, cap: u64, keep: &[&Path]) -> Result<()> {
         let mut dirs: Vec<(std::time::SystemTime, PathBuf, u64)> = Vec::new();
         let mut total = 0u64;
         for entry in fs::read_dir(&self.root).with_context(|| format!("reading {}", self.root.display()))? {
@@ -66,6 +67,9 @@ impl Cache {
         for (_, dir, size) in dirs {
             if total <= cap {
                 break;
+            }
+            if keep.contains(&dir.as_path()) {
+                continue;
             }
             fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
             total -= size;
@@ -93,12 +97,13 @@ impl Cache {
     }
 }
 
+/// Every file under `dir`, at any depth: a track keeps its layers in a subdirectory.
 fn dir_size(dir: &Path) -> Result<u64> {
     let mut total = 0;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            total += entry.metadata()?.len();
+    for entry in walkdir::WalkDir::new(dir) {
+        let entry = entry.with_context(|| format!("sizing {}", dir.display()))?;
+        if entry.file_type().is_file() {
+            total += entry.metadata().with_context(|| format!("sizing {}", entry.path().display()))?.len();
         }
     }
     Ok(total)
@@ -439,8 +444,10 @@ mod tests {
         let base = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
         for (i, name) in ["old", "middle", "new"].iter().enumerate() {
             let dir = cache.dir(name);
-            fs::create_dir_all(&dir).unwrap();
-            fs::write(dir.join("a.f32"), vec![0u8; 1 << 20]).unwrap();
+            // Where a track keeps its layers: a directory below its own.
+            let stems = dir.join("stems");
+            fs::create_dir_all(&stems).unwrap();
+            fs::write(stems.join("a.f32"), vec![0u8; 1 << 20]).unwrap();
             write_meta(&dir, &meta(name)).unwrap();
             File::options()
                 .write(true)
@@ -449,10 +456,16 @@ mod tests {
                 .set_modified(base + std::time::Duration::from_secs(i as u64 * 10))
                 .unwrap();
         }
-        cache.evict((2 << 20) + (1 << 19)).unwrap();
+        cache.evict((2 << 20) + (1 << 19), &[]).unwrap();
         assert!(!cache.dir("old").exists(), "the oldest directory must go first");
         assert!(cache.dir("middle").exists());
         assert!(cache.dir("new").exists());
+
+        // The loaded track is never evicted, however old: the next oldest goes instead.
+        let loaded = cache.dir("middle");
+        cache.evict(1 << 20, &[loaded.as_path()]).unwrap();
+        assert!(cache.dir("middle").exists(), "the loaded track's directory stays");
+        assert!(!cache.dir("new").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

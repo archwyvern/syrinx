@@ -61,8 +61,14 @@ pub fn overview_of(sum: &[f32], channels: u32, frames_per_column: usize) -> Vec<
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Render {
-    Rendering { started: Instant },
-    Done { took: Duration },
+    Rendering {
+        started: Instant,
+    },
+    Done {
+        took: Duration,
+        /// Whether any layer or the mix was rendered, as opposed to found complete in the cache.
+        rendered: bool,
+    },
     Failed(String),
 }
 
@@ -96,7 +102,7 @@ pub struct Track {
     pub dependencies: Vec<PathBuf>,
     pub render: Mutex<Render>,
     pub overview: Mutex<Overview>,
-    /// Set when the track is dropped: the layer writers stop pulling and drop their streams.
+    /// Set by [`Track::cancel`]: the layer writers stop pulling and drop their streams.
     cancel: Arc<AtomicBool>,
 }
 
@@ -220,6 +226,12 @@ impl Track {
         self.render.lock().unwrap().clone()
     }
 
+    /// Stops the render: the owner is letting the track go. The render threads hold the track
+    /// themselves, so dropping the last outside handle cannot stop them; this does.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
@@ -236,6 +248,7 @@ impl Track {
     /// or run whole once the layers are in, then the seek bar's picture.
     fn render(self: Arc<Self>, source: Source, meta: Meta, repaint: Arc<impl Fn() + Send + Sync + 'static>) {
         let started = Instant::now();
+        let mut rendered = false;
         let result = (|| -> Result<()> {
             // The master first: a probe is quick and tells the mixer thread what to do while
             // the layers are still coming.
@@ -264,6 +277,7 @@ impl Track {
                 .map(|(n, _)| n.as_str())
                 .collect();
             if !missing.is_empty() {
+                rendered = true;
                 let stems = source.stems(&missing).map_err(|e| anyhow!("{}", describe_error(&self.path, &e)))?;
                 self.write_layers(stems, &repaint)?;
             }
@@ -274,6 +288,7 @@ impl Track {
             if let Some(mut mixer) = whole_master {
                 let mix = self.mix.as_ref().expect("a whole master has a mix file");
                 if !mix.is_complete() {
+                    rendered = true;
                     let mut layers: Vec<Vec<f32>> = Vec::with_capacity(self.stems.len());
                     for file in &self.stems {
                         let mut samples = Vec::new();
@@ -293,7 +308,7 @@ impl Track {
         })();
 
         match result {
-            Ok(()) => *self.render.lock().unwrap() = Render::Done { took: started.elapsed() },
+            Ok(()) => *self.render.lock().unwrap() = Render::Done { took: started.elapsed(), rendered },
             Err(e) => self.fail(format!("{e:#}")),
         }
         repaint();
@@ -395,12 +410,6 @@ impl Track {
                 repaint();
             }
         }
-    }
-}
-
-impl Drop for Track {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
     }
 }
 

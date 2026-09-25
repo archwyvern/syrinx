@@ -21,6 +21,8 @@ pub struct Shared {
     pub starved: AtomicBool,
     /// Master volume, `f32` bits.
     pub volume: AtomicU32,
+    /// Silence at the device without moving the volume: a screenshot run plays, unheard.
+    pub muted: AtomicBool,
     /// Device frames the callback has taken from the ring since the stream opened.
     pub consumed: AtomicU64,
     /// The `consumed` count at which the current track ends; `u64::MAX` while it has not.
@@ -34,6 +36,7 @@ impl Shared {
             flush: AtomicBool::new(false),
             starved: AtomicBool::new(false),
             volume: AtomicU32::new(volume.to_bits()),
+            muted: AtomicBool::new(false),
             consumed: AtomicU64::new(0),
             finished_at: AtomicU64::new(u64::MAX),
         })
@@ -54,42 +57,49 @@ pub struct DeviceInfo {
     pub is_default: bool,
 }
 
-/// Every output device the default host knows, the default first.
-pub fn devices() -> Vec<DeviceInfo> {
-    let host = cpal::default_host();
-    let default_name = host.default_output_device().and_then(|d| d.description().ok()).map(|d| d.name().to_string());
-    let mut out = Vec::new();
-    if let Ok(devices) = host.output_devices() {
-        for device in devices {
-            if let Ok(description) = device.description() {
-                let name = description.name().to_string();
-                let is_default = default_name.as_deref() == Some(name.as_str());
-                out.push(DeviceInfo { name, is_default });
-            }
-        }
-    }
-    out.sort_by_key(|d| !d.is_default);
-    out
-}
-
-pub struct Output {
+/// What is known of the open device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputInfo {
     pub device_name: String,
     pub sample_rate: u32,
     pub channels: u16,
-    _stream: cpal::Stream,
 }
 
-impl Output {
-    /// Opens `device_name` (or the default device) at its default configuration, as f32, and
-    /// returns the producer end of a fresh ring for the mixer. `on_error` hears the stream's
-    /// error callback (a device unplugged, a server gone).
-    pub fn open(
-        device_name: Option<&str>,
-        shared: Arc<Shared>,
-        on_error: impl Fn(String) + Send + 'static,
-    ) -> Result<(Output, rtrb::Producer<f32>)> {
+/// Hears a running stream fail: a device unplugged, a sound server gone.
+pub type OnError = Box<dyn Fn(String) + Send + 'static>;
+
+/// The session's way to the sound card: [`Cpal`] in the player; a test brings its own and plays
+/// the callback's part itself.
+pub trait Audio {
+    /// Opens `name` (the default device when `None`) at its default configuration and returns
+    /// the producer end of a fresh ring for the mixer. On failure whatever was open stays open.
+    fn open(
+        &mut self,
+        name: Option<&str>,
+        shared: &Arc<Shared>,
+        on_error: OnError,
+    ) -> Result<(OutputInfo, rtrb::Producer<f32>)>;
+
+    /// Every output device, the default first.
+    fn devices(&mut self) -> Vec<DeviceInfo>;
+}
+
+/// The real device through cpal's default host. Holds the open stream; opening another one
+/// replaces it.
+#[derive(Default)]
+pub struct Cpal {
+    stream: Option<cpal::Stream>,
+}
+
+impl Audio for Cpal {
+    fn open(
+        &mut self,
+        name: Option<&str>,
+        shared: &Arc<Shared>,
+        on_error: OnError,
+    ) -> Result<(OutputInfo, rtrb::Producer<f32>)> {
         let host = cpal::default_host();
-        let device = match device_name {
+        let device = match name {
             Some(wanted) => host
                 .output_devices()
                 .context("listing output devices")?
@@ -108,7 +118,7 @@ impl Output {
         let capacity = (config.sample_rate as usize) * channels * RING_SECONDS as usize;
         let (producer, mut consumer) = rtrb::RingBuffer::<f32>::new(capacity);
 
-        let callback_shared = Arc::clone(&shared);
+        let callback_shared = Arc::clone(shared);
         let data = move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
             let shared = &callback_shared;
             if shared.flush.load(Ordering::Acquire) {
@@ -122,7 +132,11 @@ impl Output {
                 out.fill(0.0);
                 return;
             }
-            let volume = f32::from_bits(shared.volume.load(Ordering::Relaxed));
+            let volume = if shared.muted.load(Ordering::Relaxed) {
+                0.0
+            } else {
+                f32::from_bits(shared.volume.load(Ordering::Relaxed))
+            };
             let want = out.len() - out.len() % channels;
             let mut have = consumer.slots().min(want);
             have -= have % channels;
@@ -146,14 +160,30 @@ impl Output {
             .build_output_stream(config, data, error, Some(Duration::from_secs(2)))
             .context("opening the output stream")?;
         stream.play().context("starting the output stream")?;
-        Ok((
-            Output {
-                device_name: description.name().to_string(),
-                sample_rate: config.sample_rate,
-                channels: config.channels,
-                _stream: stream,
-            },
-            producer,
-        ))
+        self.stream = Some(stream);
+        let info = OutputInfo {
+            device_name: description.name().to_string(),
+            sample_rate: config.sample_rate,
+            channels: config.channels,
+        };
+        Ok((info, producer))
+    }
+
+    fn devices(&mut self) -> Vec<DeviceInfo> {
+        let host = cpal::default_host();
+        let default_name =
+            host.default_output_device().and_then(|d| d.description().ok()).map(|d| d.name().to_string());
+        let mut out = Vec::new();
+        if let Ok(devices) = host.output_devices() {
+            for device in devices {
+                if let Ok(description) = device.description() {
+                    let name = description.name().to_string();
+                    let is_default = default_name.as_deref() == Some(name.as_str());
+                    out.push(DeviceInfo { name, is_default });
+                }
+            }
+        }
+        out.sort_by_key(|d| !d.is_default);
+        out
     }
 }

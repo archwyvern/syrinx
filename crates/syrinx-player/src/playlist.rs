@@ -1,6 +1,8 @@
 //! The playlist: an ordered list of sources, nothing more. Rows come from launch arguments,
 //! drops and the open dialog; a background thread fills in each row's name, duration and
 //! layers by inspecting it, so the list shows what the file says it is rather than its name.
+//! A row keeps its id for as long as it is listed, so the window can name a row in an action
+//! even when the list has moved under it since the frame it drew.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -9,8 +11,13 @@ use syrinx_core::RenderOptions;
 
 use crate::track::{RENDER_TIMEOUT, describe_error};
 
+/// A row's identity: unique within one playlist for its whole life, never reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RowId(u64);
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
+    pub id: RowId,
     pub path: PathBuf,
     /// The file's stem, replaced by `meta.name` when inspection finds one.
     pub name: String,
@@ -21,18 +28,12 @@ pub struct Row {
     pub error: Option<String>,
 }
 
-impl Row {
-    fn new(path: PathBuf) -> Row {
-        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        Row { path, name, duration: None, stems: Vec::new(), error: None }
-    }
-}
-
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Playlist {
     pub rows: Vec<Row>,
     /// The row that is loaded (playing or paused).
     pub current: Option<usize>,
+    next_id: u64,
 }
 
 impl Playlist {
@@ -44,7 +45,10 @@ impl Playlist {
             if self.rows.iter().any(|r| r.path == path) {
                 continue;
             }
-            self.rows.push(Row::new(path));
+            let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let id = RowId(self.next_id);
+            self.next_id += 1;
+            self.rows.push(Row { id, path, name, duration: None, stems: Vec::new(), error: None });
             added.push(self.rows.len() - 1);
         }
         added
@@ -72,6 +76,10 @@ impl Playlist {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.current = None;
+    }
+
+    pub fn index_of(&self, id: RowId) -> Option<usize> {
+        self.rows.iter().position(|r| r.id == id)
     }
 
     pub fn next(&self) -> Option<usize> {
@@ -126,15 +134,14 @@ pub struct Inspected {
     pub result: Result<(Option<String>, f64, Vec<String>), String>,
 }
 
-/// Inspects each row on one background thread, in order; results arrive on the receiver and
-/// `repaint` is called after each so the window redraws.
-pub fn inspect_rows(rows: Vec<(usize, PathBuf)>, repaint: impl Fn() + Send + 'static) -> Receiver<Inspected> {
+/// Inspects each source on one background thread, in order; results arrive on the receiver.
+pub fn inspect_rows(paths: Vec<PathBuf>) -> Receiver<Inspected> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("syrinx-player-inspect".into())
         .spawn(move || {
             let opts = RenderOptions { timeout: RENDER_TIMEOUT, ..RenderOptions::default() };
-            for (_, path) in rows {
+            for path in paths {
                 let result =
                     std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display())).and_then(|source| {
                         syrinx_core::inspect(&source, &path.to_string_lossy(), &opts)
@@ -144,7 +151,6 @@ pub fn inspect_rows(rows: Vec<(usize, PathBuf)>, repaint: impl Fn() + Send + 'st
                 if tx.send(Inspected { path, result }).is_err() {
                     return;
                 }
-                repaint();
             }
         })
         .expect("spawn the inspect thread");
@@ -172,17 +178,54 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    fn listed(names: &[&str]) -> (Playlist, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "syrinx-player-rows-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<PathBuf> = names
+            .iter()
+            .map(|n| {
+                let path = dir.join(format!("{n}.syr"));
+                fs::write(&path, "").unwrap();
+                path
+            })
+            .collect();
+        let mut p = Playlist::default();
+        p.append(&paths);
+        (p, dir)
+    }
+
     #[test]
     fn remove_keeps_current_pointing_at_the_same_row() {
-        let mut p = Playlist {
-            rows: ["a", "b", "c"].iter().map(|n| Row::new(PathBuf::from(format!("/t/{n}.syr")))).collect(),
-            current: Some(2),
-        };
+        let (mut p, dir) = listed(&["a", "b", "c"]);
+        p.current = Some(2);
         p.remove(0);
         assert_eq!(p.current, Some(1));
         assert_eq!(p.rows[1].name, "c");
         p.remove(1);
         assert_eq!(p.current, None);
         assert_eq!(p.next(), Some(0));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_row_keeps_its_id_while_the_list_moves_and_ids_are_never_reused() {
+        let (mut p, dir) = listed(&["a", "b", "c"]);
+        let c = p.rows[2].id;
+        p.remove(0);
+        assert_eq!(p.index_of(c), Some(1), "the id follows the row, not the index");
+        let gone = p.rows[0].id;
+        p.remove(0);
+        assert_eq!(p.index_of(gone), None);
+        fs::write(dir.join("d.syr"), "").unwrap();
+        p.append(&[dir.join("d.syr")]);
+        let d = p.rows[1].id;
+        assert!(d != gone && d != c, "a new row gets a new id");
+        p.clear();
+        assert_eq!(p.index_of(c), None);
+        fs::remove_dir_all(dir).unwrap();
     }
 }

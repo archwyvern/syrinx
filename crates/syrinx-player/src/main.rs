@@ -6,12 +6,14 @@
 
 mod app;
 mod cache;
+mod fader;
 mod instance;
 mod mixer;
 mod output;
 mod playlist;
 mod register;
 mod resample;
+mod session;
 mod theme;
 mod track;
 mod watch;
@@ -23,6 +25,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::instance::{Acquire, Request};
+
+/// A first launch's window, in points: room for a dozen layers without scrolling.
+const DEFAULT_WINDOW: [f32; 2] = [880.0, 800.0];
 
 #[derive(Parser)]
 #[command(
@@ -44,6 +49,10 @@ struct Cli {
     /// Seconds to wait before the screenshot.
     #[arg(long, hide = true, default_value_t = 2.0, value_name = "SECONDS")]
     screenshot_delay: f64,
+    /// The window's size in points for a screenshot run, `WIDTHxHEIGHT`, to check a narrow or a
+    /// tall window; the default is what a first launch gets.
+    #[arg(long, hide = true, value_name = "WxH")]
+    window_size: Option<String>,
     /// Name of the single-instance socket to use instead of the user's, so a test can run its
     /// own player beside a real one. A screenshot run gets a private one by default.
     #[arg(long, hide = true, value_name = "NAME")]
@@ -89,36 +98,48 @@ fn run() -> Result<()> {
         None if cli.screenshot.is_some() => format!("-shot-{}", std::process::id()),
         None => String::new(),
     };
-    let (rx, ctx_slot) = match instance::acquire(&suffix, Request { replace: !paths.is_empty(), paths: paths.clone() })
-    {
+    let rx = match instance::acquire(&suffix, Request { replace: !paths.is_empty(), paths: paths.clone() }) {
         Acquire::Handled => return Ok(()),
-        Acquire::Listening(rx, slot) => (rx, slot),
+        Acquire::Listening(rx) => rx,
     };
 
     let cache = cache::Cache::open()?;
-    if let Err(e) = cache.evict(cache::CACHE_CAP_BYTES) {
+    if let Err(e) = cache.evict(cache::CACHE_CAP_BYTES, &[]) {
         eprintln!("warning: trimming the render cache: {e:#}");
     }
 
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../logo/syrinx-512.png"))
         .context("decoding the window icon")?;
+    // A screenshot run is silent and keeps its window and settings to itself, so checking the
+    // window by eye never plays through the user's speakers or changes the user's player.
+    let ephemeral = cli.screenshot.is_some();
+    let size = match &cli.window_size {
+        Some(spec) => {
+            let (w, h) = spec.split_once('x').context("--window-size wants WIDTHxHEIGHT")?;
+            [
+                w.trim().parse::<f32>().context("--window-size width")?,
+                h.trim().parse::<f32>().context("--window-size height")?,
+            ]
+        }
+        None => DEFAULT_WINDOW,
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("syrinx-player")
             .with_app_id("syrinx-player")
-            .with_inner_size([880.0, 540.0])
+            .with_inner_size(size)
             .with_min_inner_size([580.0, 380.0])
             .with_icon(icon),
-        persist_window: true,
+        persist_window: !ephemeral,
+        persistence_path: ephemeral.then(|| std::env::temp_dir().join("syrinx-player-screenshot")),
         ..Default::default()
     };
     eframe::run_native(
         "syrinx-player",
         options,
         Box::new(move |cc| {
-            *ctx_slot.lock().unwrap() = Some(cc.egui_ctx.clone());
             theme::apply(&cc.egui_ctx);
-            let mut app = app::PlayerApp::new(cc, cache, paths, rx)?;
+            let mut app = app::PlayerApp::new(cc, cache, paths, rx, ephemeral);
             app.screenshot_to(cli.screenshot, std::time::Duration::from_secs_f64(cli.screenshot_delay));
             Ok(Box::new(app))
         }),

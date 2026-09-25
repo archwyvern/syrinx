@@ -526,8 +526,8 @@ syrinx-player --register                  # Windows: associate .syr with this ex
 Drop files or folders onto the window to add them. A second launch hands its paths to the
 running player instead of opening another window, so double-clicking a `.syr` in the file
 manager replaces what is playing. Keys: Space play/pause, Home start, arrows seek 5 s (Shift:
-30 s) and volume, L loop, N/P next and previous, Delete removes the selected row, O opens the
-file dialog, R re-renders the current track.
+30 s) and volume, L loop, N/P next and previous, Enter plays the selected row, Delete removes it,
+O opens the file dialog, R re-renders the current track. The menu at the bottom right lists them.
 
 The faders scale each layer before the mix stage. For a whole-buffer source (every source today)
 the canonical mix plays while all faders sit at unity; move one and the player plays the plain

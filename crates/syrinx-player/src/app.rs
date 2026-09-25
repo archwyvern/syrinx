@@ -1,69 +1,71 @@
 //! The window: a playlist on the left; the track's name and geometry, the seek bar (a picture
 //! of the sound with the unrendered tail hatched), a fader per layer, the transport and a
-//! status line on the right. Everything that takes time happens on another thread; this file
-//! reads atomics and channels once per frame.
+//! status line on the right. It decides nothing about what plays: each frame it draws the
+//! session's latest [`View`] and sends it [`Action`]s, so the player carries on while the window
+//! goes unpainted (minimised, or on another workspace).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
-use egui::{Color32, Key, Modifiers, RichText, Sense, Stroke, Vec2, ViewportCommand};
+use egui::{Align, Color32, Key, Layout, Modifiers, Rect, RichText, Sense, Stroke, Vec2, ViewportCommand};
 use egui_file_dialog::FileDialog;
-use serde::{Deserialize, Serialize};
 
 use crate::cache::Cache;
+use crate::fader::{self, Needle};
 use crate::instance::Request;
-use crate::mixer::{Command, Gains, MixerHandle};
-use crate::output::{DeviceInfo, Output, Shared, devices};
-use crate::playlist::{self, Inspected, Playlist};
+use crate::mixer::Gains;
+use crate::output::Cpal;
+use crate::playlist::{Row, RowId};
+use crate::session::{Action, SessionHandle, Settings, Start, View};
 use crate::theme;
 use crate::track::{Render, Track};
-use crate::watch::Watch;
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Settings {
-    pub volume: f32,
-    pub loop_track: bool,
-    /// `None` = the default device.
-    pub device: Option<String>,
-    pub reload_on_change: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings { volume: 0.8, loop_track: false, device: None, reload_on_change: true }
-    }
-}
 
 const SETTINGS_KEY: &str = "settings";
+/// The keyboard, as the menu lists it.
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("Space", "play / pause"),
+    ("Enter", "play the selected track"),
+    ("Left / Right", "seek 5 s; with Shift, 30 s"),
+    ("Home", "back to the start"),
+    ("Up / Down", "volume"),
+    ("N / P", "next / previous track"),
+    ("L", "loop this track"),
+    ("O", "add files or folders"),
+    ("Delete", "remove the selected track"),
+    ("R", "re-render this track"),
+];
+
 const SEEK_SMALL: f64 = 5.0;
 const SEEK_LARGE: f64 = 30.0;
+/// How long a note stays in the status line.
+const NOTE_FOR: Duration = Duration::from_secs(8);
 
 pub struct PlayerApp {
-    cache: Cache,
-    settings: Settings,
-    playlist: Playlist,
-    inspects: Vec<Receiver<Inspected>>,
-    requests: Receiver<Request>,
-    shared: Arc<Shared>,
-    output: Option<Output>,
-    output_error: Arc<Mutex<Option<String>>>,
-    mixer: MixerHandle,
-    track: Option<Arc<Track>>,
-    gains: Option<Arc<Gains>>,
-    watch: Option<Watch>,
+    session: SessionHandle,
+    cache_root: PathBuf,
     dialog: FileDialog,
-    selected: Option<usize>,
-    devices: Vec<DeviceInfo>,
-    devices_listed: Instant,
-    note: Option<(String, Instant)>,
-    /// Where the playhead is meant to be while no chunk has been pushed since a seek.
-    seek_target: Option<usize>,
+    selected: Option<RowId>,
+    /// The loaded row as of the last frame: the selection follows the track that plays.
+    followed: Option<RowId>,
+    /// The window title as last set.
+    title: String,
+    /// The session's hand-over count as of the last frame.
+    handovers: u64,
+    /// When the picker last asked for the device list.
+    devices_asked: Option<Instant>,
+    /// Where the seek bar is being dragged to, as a fraction; the seek happens on release.
+    scrub: Option<f32>,
+    /// The layers' meters, for the track they were made for, and when they last moved.
+    needles: Vec<Needle>,
+    needles_for: Option<usize>,
+    needles_at: Instant,
     /// `--screenshot`: where to write the window, when it was opened, the delay, whether asked yet.
     screenshot: Option<(PathBuf, Instant, Duration, bool)>,
+    /// A screenshot run: default settings, muted at the device, nothing saved.
+    ephemeral: bool,
     ctx: egui::Context,
 }
 
@@ -73,48 +75,44 @@ impl PlayerApp {
         cache: Cache,
         initial: Vec<PathBuf>,
         requests: Receiver<Request>,
-    ) -> Result<PlayerApp> {
-        let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
-        let shared = Shared::new(settings.volume);
-        let output_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        ephemeral: bool,
+    ) -> PlayerApp {
+        let settings: Settings = if ephemeral {
+            Settings::default()
+        } else {
+            cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default()
+        };
         let ctx = cc.egui_ctx.clone();
-
-        let (output, producer, note) = open_output(settings.device.as_deref(), &shared, &output_error, &ctx);
-        let (rate, channels) = output.as_ref().map_or((48_000, 2), |o| (o.sample_rate, o.channels));
-        let mixer = MixerHandle::spawn(producer, Arc::clone(&shared), rate, channels);
-        mixer.send(Command::Loop(settings.loop_track));
-
-        let mut app = PlayerApp {
-            cache,
-            settings,
-            playlist: Playlist::default(),
-            inspects: Vec::new(),
-            requests,
-            shared,
-            output,
-            output_error,
-            mixer,
-            track: None,
-            gains: None,
-            watch: None,
+        let cache_root = cache.root().to_path_buf();
+        let repaint = {
+            let ctx = ctx.clone();
+            move || ctx.request_repaint()
+        };
+        let session = SessionHandle::spawn(
+            Start { cache, settings, paths: initial, requests, muted: ephemeral },
+            || Box::new(Cpal::default()),
+            repaint,
+        );
+        PlayerApp {
+            session,
+            cache_root,
             dialog: FileDialog::new()
                 .title("Add sources")
                 .add_file_filter_extensions("syrinx sources", vec!["syr"])
                 .default_file_filter("syrinx sources"),
             selected: None,
-            devices: Vec::new(),
-            devices_listed: Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now),
-            note: note.map(|n| (n, Instant::now())),
-            seek_target: None,
+            followed: None,
+            title: "syrinx-player".into(),
+            handovers: 0,
+            devices_asked: None,
+            scrub: None,
+            needles: Vec::new(),
+            needles_for: None,
+            needles_at: Instant::now(),
             screenshot: None,
+            ephemeral,
             ctx,
-        };
-        if !initial.is_empty() {
-            let added = app.playlist.replace(&initial);
-            app.queue_inspect(added);
-            app.play(0);
         }
-        Ok(app)
     }
 
     pub fn screenshot_to(&mut self, path: Option<PathBuf>, delay: Duration) {
@@ -153,516 +151,264 @@ impl PlayerApp {
         }
     }
 
-    fn repaint(&self) -> impl Fn() + Send + Sync + 'static {
-        let ctx = self.ctx.clone();
-        move || ctx.request_repaint()
-    }
-
-    fn say(&mut self, text: impl Into<String>) {
-        self.note = Some((text.into(), Instant::now()));
-    }
-
-    // ------------------------------------------------------------------ playlist and tracks
-
-    fn queue_inspect(&mut self, indices: Vec<usize>) {
-        if indices.is_empty() {
-            return;
-        }
-        let rows: Vec<(usize, PathBuf)> = indices.iter().map(|&i| (i, self.playlist.rows[i].path.clone())).collect();
-        let rx = playlist::inspect_rows(rows, self.repaint());
-        self.inspects.push(rx);
-    }
-
-    fn poll_inspects(&mut self) {
-        let mut done = Vec::new();
-        for (k, rx) in self.inspects.iter().enumerate() {
-            loop {
-                match rx.try_recv() {
-                    Ok(found) => {
-                        // Rows may have moved since the inspection was queued: match by path.
-                        if let Some(row) = self.playlist.rows.iter_mut().find(|r| r.path == found.path) {
-                            match found.result {
-                                Ok((name, duration, stems)) => {
-                                    // A source that declares no name keeps its file's stem.
-                                    if let Some(name) = name {
-                                        row.name = name;
-                                    }
-                                    row.duration = Some(duration);
-                                    row.stems = stems;
-                                    row.error = None;
-                                }
-                                Err(e) => row.error = Some(e),
-                            }
-                        }
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        done.push(k);
-                        break;
-                    }
-                }
-            }
-        }
-        for k in done.into_iter().rev() {
-            self.inspects.remove(k);
-        }
-    }
-
-    fn add_paths(&mut self, paths: &[PathBuf], replace: bool) {
-        let added = if replace { self.playlist.replace(paths) } else { self.playlist.append(paths) };
-        let first = added.first().copied();
-        self.queue_inspect(added);
-        if replace {
-            self.stop();
-            if let Some(i) = first {
-                self.play(i);
-            }
-        } else if self.track.is_none()
-            && let Some(i) = first
-        {
-            self.play(i);
-        }
-    }
-
-    /// Loads row `i` and plays it from the start; a row that fails is marked and skipped, so a
-    /// playlist plays through around a broken file.
-    fn play(&mut self, i: usize) {
-        let mut i = i;
-        for _ in 0..self.playlist.rows.len().max(1) {
-            if i >= self.playlist.rows.len() {
-                return;
-            }
-            match self.load(i, 0) {
-                Ok(()) => return,
-                Err(e) => {
-                    self.playlist.rows[i].error = Some(format!("{e:#}"));
-                    i += 1;
-                }
-            }
-        }
-        self.stop();
-    }
-
-    fn load(&mut self, i: usize, start_frame: usize) -> Result<()> {
-        let path = self.playlist.rows[i].path.clone();
-        let track = Track::open(&self.cache, &path, self.repaint())?;
-        // Faders survive a reload of the same file, by layer name.
-        let previous = self.gains.take().zip(self.track.take());
-        let gains = Arc::new(Gains::new(track.stem_names.len()));
-        if let Some((old_gains, old_track)) = previous
-            && old_track.path == track.path
-        {
-            for (n, name) in track.stem_names.iter().enumerate() {
-                if let Some(o) = old_track.stem_names.iter().position(|s| s == name) {
-                    gains.set_gain(n, old_gains.gain(o));
-                    gains.set_mute(n, old_gains.muted(o));
-                    gains.set_solo(n, old_gains.soloed(o));
-                }
-            }
-        }
-        self.watch = if self.settings.reload_on_change {
-            let mut closure = track.dependencies.clone();
-            closure.push(track.path.clone());
-            match Watch::new(closure, self.repaint()) {
-                Ok(w) => Some(w),
-                Err(e) => {
-                    self.say(format!("not watching for changes: {e:#}"));
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        // The mixer resets these too, but not before its thread gets to the command; until then
-        // the previous track's end would read as this one's and advance the playlist again.
-        self.shared.finished_at.store(u64::MAX, Ordering::Relaxed);
-        self.mixer.status.at_end.store(false, Ordering::Relaxed);
-        self.mixer.send(Command::Load { track: Arc::clone(&track), gains: Arc::clone(&gains), start_frame });
-        self.shared.playing.store(true, Ordering::Relaxed);
-        self.seek_target = Some(start_frame);
-        self.ctx.send_viewport_cmd(ViewportCommand::Title(format!("{} - syrinx-player", track.name)));
-        self.playlist.rows[i].name = track.name.clone();
-        self.playlist.rows[i].duration = Some(track.duration);
-        self.playlist.rows[i].stems = track.stem_names.clone();
-        self.playlist.rows[i].error = None;
-        self.playlist.current = Some(i);
-        self.selected = Some(i);
-        self.track = Some(track);
-        self.gains = Some(gains);
-        Ok(())
-    }
-
-    fn stop(&mut self) {
-        self.shared.playing.store(false, Ordering::Relaxed);
-        self.mixer.send(Command::Unload);
-        self.track = None;
-        self.gains = None;
-        self.watch = None;
-        self.seek_target = None;
-        self.playlist.current = None;
-        self.ctx.send_viewport_cmd(ViewportCommand::Title("syrinx-player".into()));
-    }
-
-    fn reload(&mut self) {
-        let Some(i) = self.playlist.current else {
-            return;
-        };
-        let position = self.position().unwrap_or(0);
-        let was_playing = self.shared.playing.load(Ordering::Relaxed);
-        eprintln!(
-            "reload: {} changed, resuming at {}",
-            self.playlist.rows[i].path.display(),
-            fmt_time(position as f64 / self.track.as_ref().map_or(48_000.0, |t| t.sample_rate as f64))
-        );
-        if let Err(e) = self.load(i, position) {
-            self.playlist.rows[i].error = Some(format!("{e:#}"));
-            self.say(format!("{e:#}"));
-            self.shared.playing.store(false, Ordering::Relaxed);
-            return;
-        }
-        self.shared.playing.store(was_playing, Ordering::Relaxed);
-    }
-
-    fn rerender(&mut self) {
-        let Some(track) = self.track.clone() else {
-            return;
-        };
-        let position = self.position().unwrap_or(0);
-        let i = self.playlist.current;
-        // Drop every handle to the files before removing the directory.
-        self.mixer.send(Command::Unload);
-        self.track = None;
-        let dir = track.dir.clone();
-        drop(track);
-        let _ = std::fs::remove_dir_all(&dir);
-        if let Some(i) = i
-            && let Err(e) = self.load(i, position)
-        {
-            self.playlist.rows[i].error = Some(format!("{e:#}"));
-        }
-    }
-
-    fn toggle_play(&mut self) {
-        if self.track.is_some() {
-            let at_end = self.mixer.status.at_end.load(Ordering::Relaxed);
-            if at_end && !self.settings.loop_track {
-                self.seek(0);
-                self.shared.playing.store(true, Ordering::Relaxed);
-            } else {
-                self.shared.playing.fetch_xor(true, Ordering::Relaxed);
-            }
-        } else if let Some(i) = self.selected.or_else(|| self.playlist.rows.first().map(|_| 0)) {
-            self.play(i);
-        }
-    }
-
-    fn seek(&mut self, frame: usize) {
-        if let Some(track) = &self.track {
-            let frame = frame.min(track.frames);
-            self.shared.finished_at.store(u64::MAX, Ordering::Relaxed);
-            self.mixer.status.at_end.store(false, Ordering::Relaxed);
-            self.mixer.send(Command::Seek(frame));
-            self.seek_target = Some(frame);
-        }
-    }
-
-    fn seek_by(&mut self, seconds: f64) {
-        if let Some(track) = &self.track {
-            let now = self.position().unwrap_or(0) as f64;
-            let target = (now + seconds * track.sample_rate as f64).max(0.0) as usize;
-            self.seek(target);
-        }
-    }
-
-    /// The source frame under the playhead: from the callback's frame count through the
-    /// mixer's checkpoints, or the seek target while nothing has been pushed since a seek.
-    fn position(&self) -> Option<usize> {
-        let track = self.track.as_ref()?;
-        let consumed = self.shared.consumed.load(Ordering::Relaxed);
-        let device_rate = self.output.as_ref().map_or(track.sample_rate, |o| o.sample_rate);
-        let mapped = self.mixer.checkpoints.position(consumed, device_rate, track.sample_rate);
-        match (mapped, self.seek_target) {
-            (Some(p), _) => Some(p.min(track.frames)),
-            (None, Some(t)) => Some(t),
-            (None, None) => Some(0),
-        }
-    }
-
-    fn set_loop(&mut self, on: bool) {
-        self.settings.loop_track = on;
-        self.mixer.send(Command::Loop(on));
-    }
-
-    fn switch_device(&mut self, name: Option<String>) {
-        let (output, producer, note) = open_output(name.as_deref(), &self.shared, &self.output_error, &self.ctx);
-        if let Some(out) = &output {
-            self.mixer.send(Command::Output { producer, sample_rate: out.sample_rate, channels: out.channels });
-            self.settings.device = name;
-        } else {
-            // Nothing opened: keep the old stream and say why.
-            drop(producer);
-        }
-        if let Some(n) = note {
-            self.say(n);
-        }
-        if output.is_some() {
-            self.output = output;
-        }
+    fn send(&self, action: Action) {
+        self.session.send(action);
     }
 
     // ------------------------------------------------------------------ per-frame events
 
-    fn poll(&mut self) {
-        self.poll_inspects();
-
-        while let Ok(request) = self.requests.try_recv() {
-            self.add_paths(&request.paths, request.replace);
-            self.ctx.send_viewport_cmd(ViewportCommand::Focus);
-        }
-
-        let device_error = self.output_error.lock().unwrap().take();
-        if let Some(e) = device_error {
-            self.say(format!("audio device: {e}"));
-            self.output = None;
-            self.switch_device(None);
-        }
-
-        if let Some(watch) = &self.watch {
-            if watch.changed() {
-                if self.settings.reload_on_change {
-                    self.reload();
-                }
-            } else if watch.pending() {
-                self.ctx.request_repaint_after(crate::watch::DEBOUNCE);
+    /// What the window does about the session's changes: the selection follows the loaded
+    /// track, the title names it, and a hand-over from a later launch brings the window forward.
+    fn follow(&mut self, view: &View) {
+        let current = view.playlist.current.map(|i| view.playlist.rows[i].id);
+        if current != self.followed {
+            if current.is_some() {
+                self.selected = current;
             }
+            self.followed = current;
         }
-
-        // A track that ended (or died) while not looping: advance.
-        if let Some(track) = self.track.clone() {
-            let at_end = self.mixer.status.at_end.load(Ordering::Relaxed);
-            let finished_at = self.shared.finished_at.load(Ordering::Relaxed);
-            let consumed = self.shared.consumed.load(Ordering::Relaxed);
-            if at_end && consumed >= finished_at && !self.settings.loop_track {
-                let error = self.mixer.status.error.lock().unwrap().clone().or_else(|| track.failed());
-                if let (Some(i), Some(e)) = (self.playlist.current, error) {
-                    self.playlist.rows[i].error = Some(e);
-                }
-                match self.playlist.next() {
-                    Some(next) => self.play(next),
-                    None => {
-                        self.shared.playing.store(false, Ordering::Relaxed);
-                        self.mixer.send(Command::Seek(0));
-                        self.seek_target = Some(0);
-                    }
-                }
-            }
-        }
-
-        if let Some((_, since)) = &self.note
-            && since.elapsed() > Duration::from_secs(8)
+        if let Some(id) = self.selected
+            && view.playlist.index_of(id).is_none()
         {
-            self.note = None;
+            self.selected = None;
+        }
+        let title =
+            view.track.as_ref().map_or_else(|| "syrinx-player".to_string(), |t| format!("{} - syrinx-player", t.name));
+        if title != self.title {
+            self.ctx.send_viewport_cmd(ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+        if view.handovers != self.handovers {
+            self.handovers = view.handovers;
+            self.ctx.send_viewport_cmd(ViewportCommand::Focus);
         }
     }
 
-    fn handle_keys(&mut self) {
+    fn handle_keys(&mut self, view: &View) {
         if self.ctx.egui_wants_keyboard_input() {
             return;
         }
         let ctx = self.ctx.clone();
         let pressed = |key: Key, modifiers: Modifiers| ctx.input_mut(|i| i.consume_key(modifiers, key));
         if pressed(Key::Space, Modifiers::NONE) {
-            self.toggle_play();
+            self.send(Action::TogglePlay { fallback: self.selected });
         }
         if pressed(Key::Home, Modifiers::NONE) {
-            self.seek(0);
+            self.send(Action::Seek(0));
         }
         if pressed(Key::ArrowLeft, Modifiers::SHIFT) {
-            self.seek_by(-SEEK_LARGE);
+            self.send(Action::SeekBy(-SEEK_LARGE));
         } else if pressed(Key::ArrowLeft, Modifiers::NONE) {
-            self.seek_by(-SEEK_SMALL);
+            self.send(Action::SeekBy(-SEEK_SMALL));
         }
         if pressed(Key::ArrowRight, Modifiers::SHIFT) {
-            self.seek_by(SEEK_LARGE);
+            self.send(Action::SeekBy(SEEK_LARGE));
         } else if pressed(Key::ArrowRight, Modifiers::NONE) {
-            self.seek_by(SEEK_SMALL);
+            self.send(Action::SeekBy(SEEK_SMALL));
         }
         if pressed(Key::ArrowUp, Modifiers::NONE) {
-            let v = (self.shared.volume() + 0.05).min(1.0);
-            self.shared.set_volume(v);
-            self.settings.volume = v;
+            self.send(Action::SetVolume(view.shared.volume() + 0.05));
         }
         if pressed(Key::ArrowDown, Modifiers::NONE) {
-            let v = (self.shared.volume() - 0.05).max(0.0);
-            self.shared.set_volume(v);
-            self.settings.volume = v;
+            self.send(Action::SetVolume(view.shared.volume() - 0.05));
         }
         if pressed(Key::L, Modifiers::NONE) {
-            let on = !self.settings.loop_track;
-            self.set_loop(on);
+            self.send(Action::SetLoop(!view.settings.loop_track));
         }
-        if pressed(Key::N, Modifiers::NONE)
-            && let Some(next) = self.playlist.next()
-        {
-            self.play(next);
+        if pressed(Key::N, Modifiers::NONE) {
+            self.send(Action::Next);
         }
-        if pressed(Key::P, Modifiers::NONE)
-            && let Some(prev) = self.playlist.prev()
-        {
-            self.play(prev);
+        if pressed(Key::P, Modifiers::NONE) {
+            self.send(Action::Prev);
         }
         if pressed(Key::Delete, Modifiers::NONE)
-            && let Some(i) = self.selected
+            && let Some(id) = self.selected
         {
-            self.remove_row(i);
+            self.remove_row(view, id);
         }
         if pressed(Key::O, Modifiers::NONE) {
             self.dialog.pick_multiple();
         }
         if pressed(Key::R, Modifiers::NONE) {
-            self.rerender();
+            self.send(Action::Rerender);
         }
         if pressed(Key::Enter, Modifiers::NONE)
-            && let Some(i) = self.selected
+            && let Some(id) = self.selected
         {
-            self.play(i);
+            self.send(Action::Play(id));
         }
     }
 
-    fn remove_row(&mut self, i: usize) {
-        if i >= self.playlist.rows.len() {
-            return;
+    /// Removes a row; the selection moves to the row that takes its place.
+    fn remove_row(&mut self, view: &View, id: RowId) {
+        let rows = &view.playlist.rows;
+        if let Some(i) = view.playlist.index_of(id) {
+            self.selected = rows.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| rows.get(j))).map(|r| r.id);
         }
-        if self.playlist.current == Some(i) {
-            self.stop();
-        }
-        self.playlist.remove(i);
-        self.selected = if self.playlist.rows.is_empty() { None } else { Some(i.min(self.playlist.rows.len() - 1)) };
+        self.send(Action::Remove(id));
     }
 
     fn handle_drops(&mut self) {
         let dropped: Vec<PathBuf> =
             self.ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
-            self.add_paths(&dropped, false);
+            self.send(Action::Add { paths: dropped, replace: false });
         }
     }
 
     // ------------------------------------------------------------------ drawing
 
-    fn playlist_panel(&mut self, ui: &mut egui::Ui) {
+    fn playlist_panel(&mut self, ui: &mut egui::Ui, view: &View) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("playlist").color(theme::LABEL));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("+").on_hover_text("Add files or folders (O)").clicked() {
+            ui.label(RichText::new("Playlist").color(theme::LABEL).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button("Add\u{2026}").on_hover_text("Add files or folders (O)").clicked() {
                     self.dialog.pick_multiple();
-                }
-                if !self.playlist.rows.is_empty() && ui.button("clear").clicked() {
-                    self.stop();
-                    self.playlist.clear();
-                    self.selected = None;
                 }
             });
         });
-        ui.separator();
-        if self.playlist.rows.is_empty() {
-            ui.add_space(12.0);
-            ui.label(RichText::new("Drop .syr files or folders here,\nor press + to add them.").color(theme::LABEL));
+        ui.add_space(2.0);
+        let rows = &view.playlist.rows;
+        if rows.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("Nothing here yet.").color(theme::LABEL));
             return;
         }
-        let mut play_row: Option<usize> = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for i in 0..self.playlist.rows.len() {
-                let row = &self.playlist.rows[i];
-                let is_current = self.playlist.current == Some(i);
-                let is_selected = self.selected == Some(i);
-                let name = if row.error.is_some() {
-                    RichText::new(&row.name).color(theme::ERROR)
-                } else if is_current {
-                    RichText::new(&row.name).color(theme::ACCENT).strong()
-                } else {
-                    RichText::new(&row.name)
-                };
-                let duration = row.duration.map(fmt_time).unwrap_or_default();
-                let response = ui
-                    .horizontal(|ui| {
-                        let marker = if is_current {
-                            if self.shared.playing.load(Ordering::Relaxed) { "\u{25b6}" } else { "\u{23f8}" }
-                        } else {
-                            " "
-                        };
-                        ui.add_sized([14.0, 18.0], egui::Label::new(RichText::new(marker).color(theme::ACCENT)));
-                        let r = ui.selectable_label(is_selected, name);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(duration).color(theme::LABEL));
-                        });
-                        r
-                    })
-                    .inner;
-                let response = match &row.error {
-                    Some(e) => response.on_hover_text(e),
-                    None => response.on_hover_text(row.path.display().to_string()),
-                };
-                if response.clicked() {
-                    self.selected = Some(i);
-                    play_row = Some(i);
-                }
-            }
+
+        let mut play: Option<RowId> = None;
+        let mut clear = false;
+        ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
+            // The footer, pinned to the bottom of the panel: how much is here, and a way out.
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let total: f64 = rows.iter().filter_map(|r| r.duration).sum();
+                let count = rows.len();
+                let summary =
+                    format!("{count} {}  \u{00b7}  {}", if count == 1 { "track" } else { "tracks" }, fmt_clock(total));
+                ui.label(RichText::new(summary).color(theme::LABEL));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Clear").on_hover_text("Empty the playlist").clicked() {
+                        clear = true;
+                    }
+                });
+            });
+            ui.separator();
+            ui.with_layout(Layout::top_down(Align::LEFT), |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    let playing = view.playing();
+                    for (i, row) in rows.iter().enumerate() {
+                        let is_current = view.playlist.current == Some(i);
+                        let response = playlist_row(ui, i, row, is_current, self.selected == Some(row.id), playing);
+                        if response.clicked() {
+                            self.selected = Some(row.id);
+                        }
+                        if response.double_clicked() {
+                            play = Some(row.id);
+                        }
+                    }
+                });
+            });
         });
-        if let Some(i) = play_row {
-            self.play(i);
+        if clear {
+            self.selected = None;
+            self.send(Action::Clear);
+        }
+        if let Some(id) = play {
+            self.send(Action::Play(id));
         }
     }
 
-    fn header(&mut self, ui: &mut egui::Ui) {
-        match &self.track {
-            Some(track) => {
-                ui.horizontal(|ui| {
-                    ui.heading(&track.name);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let geometry = format!(
-                            "{}  {} Hz  {}",
-                            if track.channels == 1 { "mono" } else { "stereo" },
-                            track.sample_rate,
-                            fmt_time(track.duration)
+    fn empty_state(&mut self, ui: &mut egui::Ui, view: &View) {
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() * 0.28).max(12.0));
+            egui::Frame::new()
+                .fill(theme::SURFACE)
+                .stroke(Stroke::new(1.0, theme::BORDER))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(36, 28))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        if view.playlist.rows.is_empty() {
+                            ui.label(RichText::new("Drop .syr files or folders here").size(20.0));
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new("A track starts playing as soon as its first block has rendered.")
+                                    .color(theme::LABEL),
+                            );
+                            ui.add_space(16.0);
+                            if ui.add(egui::Button::new("Add files\u{2026}").min_size(Vec2::new(140.0, 32.0))).clicked()
+                            {
+                                self.dialog.pick_multiple();
+                            }
+                        } else {
+                            ui.label(RichText::new("Nothing playing").size(20.0));
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("Double-click a track, or press Space.").color(theme::LABEL));
+                        }
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new("Space play  \u{00b7}  Left / Right seek  \u{00b7}  N / P next and previous")
+                                .color(theme::LABEL),
                         );
-                        ui.label(RichText::new(geometry).color(theme::LABEL));
                     });
                 });
-            }
-            None => {
-                ui.heading(RichText::new("nothing loaded").color(theme::LABEL));
-            }
-        }
+        });
     }
 
-    fn overview(&mut self, ui: &mut egui::Ui) {
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 84.0), Sense::click_and_drag());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, theme::WAVE_BG);
-        let Some(track) = self.track.clone() else {
-            return;
+    fn header(&mut self, ui: &mut egui::Ui, track: &Track) {
+        ui.label(RichText::new(&track.name).heading());
+        let layers = track.stem_names.len();
+        let summary = format!(
+            "{}  \u{00b7}  {} kHz  \u{00b7}  {}  \u{00b7}  {} {}",
+            if track.channels == 1 { "mono" } else { "stereo" },
+            fmt_khz(track.sample_rate),
+            fmt_clock(track.duration),
+            layers,
+            if layers == 1 { "layer" } else { "layers" }
+        );
+        ui.label(RichText::new(summary).color(theme::LABEL));
+    }
+
+    /// The seek bar: the sound's picture, the part heard brighter than the part to come, the
+    /// unrendered tail hatched, a ruler under it, and the time under the pointer. A click seeks;
+    /// a drag moves the playhead with the pointer and seeks where it is let go.
+    fn overview(&mut self, ui: &mut egui::Ui, view: &View, track: &Arc<Track>) {
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 112.0), Sense::click_and_drag());
+        let painter = ui.painter_at(rect.expand(1.0));
+        painter.rect_filled(rect, 6.0, theme::WAVE_BG);
+
+        let fraction_at = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        if response.dragged()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            self.scrub = Some(fraction_at(pos.x));
+        }
+        let playhead_x = match self.scrub {
+            Some(f) => Some(rect.left() + rect.width() * f),
+            None => view.position().map(|p| rect.left() + rect.width() * p as f32 / track.frames.max(1) as f32),
         };
+
         let overview = track.overview.lock().unwrap().clone();
         let total_columns = track.frames.div_ceil(overview.frames_per_column.max(1)).max(1);
         let column_width = rect.width() / total_columns as f32;
         let mid = rect.center().y;
-        let half = rect.height() * 0.5 - 4.0;
+        let half = rect.height() * 0.5 - 6.0;
         for (c, (lo, hi)) in overview.columns.iter().enumerate().take(overview.ready) {
             let x = rect.left() + (c as f32 + 0.5) * column_width;
             let y0 = mid - hi.clamp(-1.0, 1.0) * half;
             let y1 = mid - lo.clamp(-1.0, 1.0) * half;
+            let color = if playhead_x.is_some_and(|p| x <= p) { theme::WAVE_PLAYED } else { theme::WAVE };
             painter.line_segment(
                 [egui::pos2(x, y0.min(mid - 0.5)), egui::pos2(x, y1.max(mid + 0.5))],
-                Stroke::new(column_width.max(1.0), theme::WAVE),
+                Stroke::new(column_width.max(1.0), color),
             );
         }
         // The unrendered tail: hatched over, from the slowest layer's frontier to the end.
-        let unity = self.gains.as_ref().is_none_or(|g| g.all_unity());
+        let unity = view.gains.as_ref().is_none_or(|g| g.all_unity());
         let rendered_to = track.rendered_to(unity).unwrap_or(0);
         if rendered_to < track.frames {
             let x = rect.left() + rect.width() * rendered_to as f32 / track.frames as f32;
-            let tail = egui::Rect::from_min_max(egui::pos2(x, rect.top()), rect.max);
+            let tail = Rect::from_min_max(egui::pos2(x, rect.top()), rect.max);
             painter.rect_filled(tail, 0.0, theme::PENDING);
             let mut hx = x;
             while hx < rect.right() {
@@ -673,319 +419,393 @@ impl PlayerApp {
                 hx += 12.0;
             }
         }
-        if let Some(position) = self.position() {
-            let x = rect.left() + rect.width() * position as f32 / track.frames.max(1) as f32;
+        if let Some(x) = playhead_x {
             painter.line_segment(
                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
                 Stroke::new(2.0, theme::PLAYHEAD),
             );
         }
-        if (response.clicked() || response.dragged())
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let fraction = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-            self.seek((fraction as f64 * track.frames as f64) as usize);
+        // The time under the pointer (or being dragged to), and where a click would land.
+        if let Some(x) = response.hover_pos().map(|p| p.x).or(self.scrub.map(|f| rect.left() + rect.width() * f)) {
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                Stroke::new(1.0, theme::LABEL.gamma_multiply(0.6)),
+            );
+            let label = fmt_time(fraction_at(x) as f64 * track.duration);
+            let galley = painter.layout_no_wrap(label, egui::FontId::monospace(13.0), theme::TEXT);
+            let size = galley.size() + Vec2::new(10.0, 4.0);
+            let left = (x - size.x * 0.5).clamp(rect.left() + 2.0, rect.right() - size.x - 2.0);
+            let tag = Rect::from_min_size(egui::pos2(left, rect.top() + 4.0), size);
+            painter.rect_filled(tag, 4.0, theme::BAR);
+            painter.galley(tag.min + Vec2::new(5.0, 2.0), galley, theme::TEXT);
+        }
+        let seek_to = if response.drag_stopped() {
+            self.scrub.take()
+        } else if response.clicked() {
+            response.interact_pointer_pos().map(|p| fraction_at(p.x))
+        } else {
+            None
+        };
+        if let Some(f) = seek_to {
+            self.send(Action::Seek((f as f64 * track.frames as f64) as usize));
+        }
+
+        // The ruler: ticks at a step that keeps the labels at least 72 px apart.
+        let (ruler, _) = ui.allocate_exact_size(Vec2::new(rect.width(), 18.0), Sense::hover());
+        let painter = ui.painter_at(ruler);
+        let per_second = rect.width() as f64 / track.duration.max(0.001);
+        let step = [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0]
+            .into_iter()
+            .find(|s| s * per_second >= 72.0)
+            .unwrap_or(600.0);
+        let mut t = 0.0;
+        while t <= track.duration + 1e-9 {
+            let x = ruler.left() + (t * per_second) as f32;
+            painter.line_segment(
+                [egui::pos2(x, ruler.top()), egui::pos2(x, ruler.top() + 4.0)],
+                Stroke::new(1.0, theme::BORDER),
+            );
+            let align = if t == 0.0 { egui::Align2::LEFT_TOP } else { egui::Align2::CENTER_TOP };
+            if x + 24.0 <= ruler.right() || t == 0.0 {
+                painter.text(
+                    egui::pos2(x, ruler.top() + 4.0),
+                    align,
+                    fmt_clock(t),
+                    egui::FontId::proportional(12.0),
+                    theme::LABEL,
+                );
+            }
+            t += step;
         }
     }
 
-    fn faders(&mut self, ui: &mut egui::Ui) {
-        let (Some(track), Some(gains)) = (self.track.clone(), self.gains.clone()) else {
-            return;
-        };
+    /// A row per layer across the whole width, in fixed columns so every row lines up: the
+    /// name, a fader with the layer's meter in its groove, the fader's level, mute and solo.
+    fn layers(&mut self, ui: &mut egui::Ui, view: &View, track: &Arc<Track>, gains: &Arc<Gains>) {
+        // The meters follow what is being heard, and fall away when nothing is.
+        let now = Instant::now();
+        let key = Arc::as_ptr(track) as usize;
+        if self.needles_for != Some(key) || self.needles.len() != track.stem_names.len() {
+            self.needles = vec![Needle::new(now); track.stem_names.len()];
+            self.needles_for = Some(key);
+        }
+        let dt = now.duration_since(self.needles_at).as_secs_f32().min(0.25);
+        self.needles_at = now;
+        let peaks = if view.playing() { view.meters.at(view.shared.consumed.load(Ordering::Relaxed)) } else { None };
+        for (i, needle) in self.needles.iter_mut().enumerate() {
+            needle.update(peaks.as_ref().and_then(|p| p.get(i).copied()), dt, now);
+        }
+
         ui.horizontal(|ui| {
-            ui.label(RichText::new("layers").color(theme::LABEL));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("reset").on_hover_text("Every fader to unity, no mute, no solo").clicked() {
+            ui.label(RichText::new("Layers").color(theme::LABEL).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let touched = (0..gains.len()).any(|i| gains.gain(i) != 1.0 || gains.muted(i) || gains.soloed(i));
+                if ui
+                    .add_enabled(touched, egui::Button::new("Reset"))
+                    .on_hover_text("Every fader to unity, no mute, no solo")
+                    .clicked()
+                {
                     gains.reset();
                 }
             });
         });
-        // One group is label + slider + dB + M + S; as many across as the width takes.
-        let group_width = 110.0 + 140.0 + 64.0 + 2.0 * 26.0 + 5.0 * 10.0;
-        let per_row = ((ui.available_width() / group_width).floor() as usize).clamp(1, 3);
-        let per_row = if track.stem_names.len() <= 3 { 1 } else { per_row };
-        egui::Grid::new("faders").num_columns(per_row * 5).spacing([10.0, 6.0]).show(ui, |ui| {
+        ui.add_space(2.0);
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let name_width = track
+            .stem_names
+            .iter()
+            .map(|n| ui.fonts_mut(|f| f.layout_no_wrap(n.clone(), font.clone(), theme::TEXT).size().x))
+            .fold(0.0_f32, f32::max)
+            .clamp(56.0, 180.0);
+        const ROW: f32 = 30.0;
+        const GAP: f32 = 10.0;
+        const LEVEL: f32 = 72.0;
+        const CHIP: f32 = 32.0;
+        let effective = gains.effective();
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for (i, name) in track.stem_names.iter().enumerate() {
-                let mut gain = gains.gain(i);
-                let mut muted = gains.muted(i);
-                let mut soloed = gains.soloed(i);
-                let label = if muted || (gains.effective()[i] == 0.0) {
-                    RichText::new(name).color(theme::LABEL)
-                } else {
-                    RichText::new(name)
-                };
-                ui.add_sized([110.0, 20.0], egui::Label::new(label).truncate());
-                let slider = egui::Slider::new(&mut gain, 0.0..=2.0).show_value(false);
-                if ui.add(slider).changed() {
-                    gains.set_gain(i, gain);
+                let gain = gains.gain(i);
+                let muted = gains.muted(i);
+                let soloed = gains.soloed(i);
+                let silent = muted || effective[i] == 0.0;
+                let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::hover());
+                // Columns measured from the row's edges, never from what the previous one drew.
+                let column =
+                    |left: f32, width: f32| Rect::from_min_size(egui::pos2(left, row.top()), Vec2::new(width, ROW));
+                let solo = column(row.right() - CHIP, CHIP);
+                let mute = column(solo.left() - 6.0 - CHIP, CHIP);
+                let level = column(mute.left() - GAP - LEVEL, LEVEL);
+                let label = column(row.left(), name_width);
+                let fader_left = label.right() + GAP;
+                let travel = column(fader_left, (level.left() - GAP - fader_left).max(40.0));
+                let text_color = if silent { theme::LABEL } else { theme::TEXT };
+
+                cell(ui, label, Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(name).color(text_color)).truncate()).on_hover_text(name);
+                });
+                let id = egui::Id::new(("layer-fader", i));
+                if let Some(moved) = fader::fader(ui, travel, id, gain, &self.needles[i], silent) {
+                    gains.set_gain(i, moved);
                 }
-                ui.add_sized([64.0, 20.0], egui::Label::new(RichText::new(fmt_db(gain)).monospace()));
-                if ui.toggle_value(&mut muted, "M").on_hover_text("Mute").changed() {
-                    gains.set_mute(i, muted);
-                }
-                if ui.toggle_value(&mut soloed, "S").on_hover_text("Solo").changed() {
-                    gains.set_solo(i, soloed);
-                }
-                if (i + 1) % per_row == 0 || i + 1 == track.stem_names.len() {
-                    ui.end_row();
-                }
+                let gain = gains.gain(i);
+                cell(ui, level, Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(fmt_db(gain)).monospace().color(text_color));
+                });
+                cell(ui, mute, Layout::left_to_right(Align::Center), |ui| {
+                    if chip(ui, "M", muted, theme::MUTE).on_hover_text("Mute").clicked() {
+                        gains.set_mute(i, !muted);
+                    }
+                });
+                cell(ui, solo, Layout::left_to_right(Align::Center), |ui| {
+                    if chip(ui, "S", soloed, theme::ACCENT).on_hover_text("Solo").clicked() {
+                        gains.set_solo(i, !soloed);
+                    }
+                });
             }
         });
     }
 
-    fn transport(&mut self, ui: &mut egui::Ui) {
-        let has_track = self.track.is_some();
-        let playing = self.shared.playing.load(Ordering::Relaxed);
-        ui.horizontal(|ui| {
+    /// The transport, in the same place whatever is loaded: previous, play, next, stop, the time,
+    /// loop, and the volume.
+    fn transport_bar(&mut self, ui: &mut egui::Ui, view: &View) {
+        let has_track = view.track.is_some();
+        let playing = view.playing();
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let icon = |glyph: &str| RichText::new(glyph).size(16.0);
+            let small = Vec2::new(36.0, 32.0);
             if ui
-                .add_enabled(self.playlist.prev().is_some(), egui::Button::new("\u{23ee}"))
+                .add_enabled(view.playlist.prev().is_some(), egui::Button::new(icon("\u{23ee}")).min_size(small))
                 .on_hover_text("Previous (P)")
                 .clicked()
-                && let Some(prev) = self.playlist.prev()
             {
-                self.play(prev);
+                self.send(Action::Prev);
             }
-            let play_label = if playing && has_track { "\u{23f8}" } else { "\u{25b6}" };
-            if ui
-                .add_enabled(
-                    has_track || !self.playlist.rows.is_empty(),
-                    egui::Button::new(play_label).min_size(Vec2::new(40.0, 0.0)),
-                )
-                .on_hover_text("Play / pause (Space)")
-                .clicked()
-            {
-                self.toggle_play();
-            }
-            if ui.add_enabled(has_track, egui::Button::new("\u{23f9}")).on_hover_text("Stop").clicked() {
-                self.stop();
+            let can_play = has_track || !view.playlist.rows.is_empty();
+            let play = egui::Button::new(icon(if playing { "\u{23f8}" } else { "\u{25b6}" }).color(theme::ON_ACCENT))
+                .fill(theme::ACCENT)
+                .corner_radius(16.0)
+                .min_size(Vec2::new(48.0, 32.0));
+            if ui.add_enabled(can_play, play).on_hover_text("Play / pause (Space)").clicked() {
+                self.send(Action::TogglePlay { fallback: self.selected });
             }
             if ui
-                .add_enabled(self.playlist.next().is_some(), egui::Button::new("\u{23ed}"))
+                .add_enabled(view.playlist.next().is_some(), egui::Button::new(icon("\u{23ed}")).min_size(small))
                 .on_hover_text("Next (N)")
                 .clicked()
-                && let Some(next) = self.playlist.next()
             {
-                self.play(next);
+                self.send(Action::Next);
             }
-            ui.add_space(8.0);
-            let time = match &self.track {
+            if ui
+                .add_enabled(has_track, egui::Button::new(icon("\u{23f9}")).min_size(small))
+                .on_hover_text("Stop")
+                .clicked()
+            {
+                self.send(Action::Stop);
+            }
+            ui.add_space(10.0);
+            let time = match &view.track {
                 Some(track) => {
-                    let position = self.position().unwrap_or(0) as f64 / track.sample_rate as f64;
+                    let position = view.position().unwrap_or(0) as f64 / track.sample_rate as f64;
                     format!("{} / {}", fmt_time(position), fmt_time(track.duration))
                 }
                 None => "-:--.- / -:--.-".into(),
             };
-            ui.label(RichText::new(time).monospace());
-            ui.add_space(8.0);
-            let mut looping = self.settings.loop_track;
-            if ui.toggle_value(&mut looping, "loop").on_hover_text("Repeat this track (L)").changed() {
-                self.set_loop(looping);
+            ui.label(RichText::new(time).monospace().size(15.0));
+            ui.add_space(10.0);
+            let looping = view.settings.loop_track;
+            if chip(ui, "Loop", looping, theme::ACCENT).on_hover_text("Repeat this track (L)").clicked() {
+                self.send(Action::SetLoop(!looping));
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut volume = self.shared.volume();
+            // The volume, from the right: the percentage, the slider, and its label when the
+            // window is wide enough; a narrow window gets a shorter slider and no label.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let mut volume = view.shared.volume();
+                let room = ui.available_width() - 12.0;
+                let labelled = room >= 240.0;
+                ui.allocate_ui_with_layout(Vec2::new(40.0, 24.0), Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(format!("{:.0}%", volume * 100.0)).monospace());
+                });
+                ui.spacing_mut().slider_width = if labelled { 120.0 } else { (room - 60.0).clamp(48.0, 120.0) };
                 if ui
                     .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
                     .on_hover_text("Volume (Up / Down)")
                     .changed()
                 {
-                    self.shared.set_volume(volume);
-                    self.settings.volume = volume;
+                    self.send(Action::SetVolume(volume));
                 }
-                ui.label(RichText::new("volume").color(theme::LABEL));
+                if labelled {
+                    ui.label(RichText::new("Volume").color(theme::LABEL));
+                }
             });
         });
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let (text, color) = self.status_text();
+    fn status_bar(&mut self, ui: &mut egui::Ui, view: &View) {
+        ui.horizontal_centered(|ui| {
+            let (text, color) = status_text(view);
             ui.label(RichText::new(text).color(color));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button("\u{2630}", |ui| {
                     if ui.button("Clear render cache").clicked() {
-                        let dir = self.track.as_ref().map(|t| t.dir.clone());
-                        match self.cache.clear() {
-                            Ok(()) => self.say("render cache cleared"),
-                            Err(e) => self.say(format!("clearing the cache: {e:#}")),
-                        }
-                        if dir.is_some() {
-                            self.rerender();
-                        }
+                        self.send(Action::ClearCache);
                         ui.close();
                     }
                     if ui.button("Re-render this track (R)").clicked() {
-                        self.rerender();
+                        self.send(Action::Rerender);
                         ui.close();
                     }
-                    ui.label(
-                        RichText::new(format!("cache: {}", self.cache.root().display())).color(theme::LABEL).small(),
-                    );
+                    ui.menu_button("Shortcuts", |ui| {
+                        egui::Grid::new("shortcuts").spacing(Vec2::new(18.0, 4.0)).show(ui, |ui| {
+                            for (key, what) in SHORTCUTS {
+                                ui.label(RichText::new(*key).monospace());
+                                ui.label(RichText::new(*what).color(theme::LABEL));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                    ui.label(RichText::new(format!("cache: {}", self.cache_root.display())).color(theme::LABEL));
                 });
-                let mut reload = self.settings.reload_on_change;
+                let mut reload = view.settings.reload_on_change;
                 if ui
-                    .toggle_value(&mut reload, "reload on change")
+                    .checkbox(&mut reload, "Reload on change")
                     .on_hover_text("Re-render when the source or an import changes")
                     .changed()
                 {
-                    self.settings.reload_on_change = reload;
-                    if reload {
-                        self.reload_watch();
-                    } else {
-                        self.watch = None;
-                    }
+                    self.send(Action::SetReloadOnChange(reload));
                 }
-                self.device_picker(ui);
+                self.device_picker(ui, view);
             });
         });
-    }
-
-    fn reload_watch(&mut self) {
-        if let Some(track) = &self.track {
-            let mut closure = track.dependencies.clone();
-            closure.push(track.path.clone());
-            self.watch = Watch::new(closure, self.repaint()).ok();
+        // A note leaves the status line on time even when nothing else asks for a frame.
+        if let Some((_, at)) = &view.note
+            && at.elapsed() < NOTE_FOR
+        {
+            self.ctx.request_repaint_after(NOTE_FOR - at.elapsed());
         }
     }
 
-    fn device_picker(&mut self, ui: &mut egui::Ui) {
-        let current = self.output.as_ref().map_or("no output device".to_string(), |o| o.device_name.clone());
+    fn device_picker(&mut self, ui: &mut egui::Ui, view: &View) {
+        let current = view.output.as_ref().map_or("no output device".to_string(), |o| o.device_name.clone());
         let mut pick: Option<Option<String>> = None;
         egui::ComboBox::from_id_salt("device").selected_text(current).width(220.0).show_ui(ui, |ui| {
-            if self.devices_listed.elapsed() > Duration::from_secs(1) {
-                self.devices = devices();
-                self.devices_listed = Instant::now();
+            // Listing is slow on some systems; the session does it, at most once a second.
+            if self.devices_asked.is_none_or(|at| at.elapsed() > Duration::from_secs(1)) {
+                self.devices_asked = Some(Instant::now());
+                self.send(Action::ListDevices);
             }
-            if ui.selectable_label(self.settings.device.is_none(), "default device").clicked() {
+            if ui.selectable_label(view.settings.device.is_none(), "default device").clicked() {
                 pick = Some(None);
             }
-            for d in &self.devices {
+            for d in &view.devices {
                 let label = if d.is_default { format!("{} (default)", d.name) } else { d.name.clone() };
-                if ui.selectable_label(self.settings.device.as_deref() == Some(d.name.as_str()), label).clicked() {
+                if ui.selectable_label(view.settings.device.as_deref() == Some(d.name.as_str()), label).clicked() {
                     pick = Some(Some(d.name.clone()));
                 }
             }
         });
         if let Some(choice) = pick {
-            self.switch_device(choice);
+            self.send(Action::SetDevice(choice));
         }
-    }
-
-    fn status_text(&self) -> (String, Color32) {
-        if let Some((note, _)) = &self.note {
-            return (note.clone(), theme::WARN);
-        }
-        let Some(track) = &self.track else {
-            return (format!("{} in the playlist", self.playlist.rows.len()), theme::LABEL);
-        };
-        if let Some(e) = self.mixer.status.error.lock().unwrap().clone() {
-            return (e, theme::ERROR);
-        }
-        let render = track.render_state();
-        if let Render::Failed(e) = &render {
-            return (e.clone(), theme::ERROR);
-        }
-        let mut parts: Vec<String> = Vec::new();
-        match render {
-            Render::Rendering { started } => {
-                let frontier = track.stem_frontier();
-                parts.push(format!(
-                    "rendering {:.1} s, {} rendered",
-                    started.elapsed().as_secs_f64(),
-                    fmt_time(frontier as f64 / track.sample_rate as f64)
-                ));
-            }
-            Render::Done { took } => parts.push(if took < Duration::from_millis(5) {
-                "from cache".into()
-            } else {
-                format!("rendered in {:.1} s", took.as_secs_f64())
-            }),
-            Render::Failed(_) => {}
-        }
-        if self.mixer.status.waiting.load(Ordering::Relaxed) || self.shared.starved.load(Ordering::Relaxed) {
-            parts.push("waiting for the render".into());
-        }
-        if self.mixer.status.master_bypassed.load(Ordering::Relaxed) {
-            parts.push("master bypassed while faders are moved".into());
-        }
-        if let Some(out) = &self.output
-            && out.sample_rate != track.sample_rate
-        {
-            parts.push(format!("resampling to {} Hz", out.sample_rate));
-        }
-        (parts.join("  \u{00b7}  "), theme::LABEL)
     }
 }
 
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll();
+        // One view per frame, let go when the frame ends.
+        let view = self.session.view();
+        self.follow(&view);
         self.poll_screenshot();
         self.handle_drops();
-        self.handle_keys();
+        self.handle_keys(&view);
 
         self.dialog.update(&self.ctx.clone());
         if let Some(paths) = self.dialog.take_picked_multiple() {
-            self.add_paths(&paths, false);
+            self.send(Action::Add { paths, replace: false });
         }
 
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.add_space(2.0);
-            self.status_bar(ui);
-            ui.add_space(2.0);
-        });
-        egui::Panel::left("playlist").resizable(true).default_size(260.0).min_size(180.0).show(ui, |ui| {
-            ui.add_space(4.0);
-            self.playlist_panel(ui);
-        });
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(4.0);
-            self.header(ui);
-            ui.add_space(6.0);
-            self.overview(ui);
-            ui.add_space(8.0);
-            self.faders(ui);
-            ui.add_space(10.0);
-            self.transport(ui);
-        });
+        let bar =
+            |margin_y: i8| egui::Frame::new().fill(theme::BAR).inner_margin(egui::Margin::symmetric(12, margin_y));
+        egui::Panel::bottom("status").frame(bar(4)).show(ui, |ui| self.status_bar(ui, &view));
+        egui::Panel::bottom("transport").frame(bar(8)).show(ui, |ui| self.transport_bar(ui, &view));
+        egui::Panel::left("playlist")
+            .resizable(true)
+            .default_size(260.0)
+            .min_size(180.0)
+            .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(10)))
+            .show(ui, |ui| self.playlist_panel(ui, &view));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(16, 12)))
+            .show(ui, |ui| match (&view.track, &view.gains) {
+                (Some(track), Some(gains)) => {
+                    self.header(ui, track);
+                    ui.add_space(10.0);
+                    self.overview(ui, &view, track);
+                    ui.add_space(10.0);
+                    self.layers(ui, &view, track, gains);
+                }
+                _ => self.empty_state(ui, &view),
+            });
 
-        if self.track.is_some() {
+        // The playhead and the meters move while playing; a paused track only lets them settle.
+        if view.playing() {
+            self.ctx.request_repaint_after(Duration::from_millis(33));
+        } else if view.track.is_some() {
             self.ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, SETTINGS_KEY, &self.settings);
+        if !self.ephemeral {
+            eframe::set_value(storage, SETTINGS_KEY, &self.session.view().settings);
+        }
     }
 }
 
-/// Opens the wanted device, falling back to the default, then to nothing; the third item is a
-/// message for the status line when something was not as asked.
-fn open_output(
-    wanted: Option<&str>,
-    shared: &Arc<Shared>,
-    output_error: &Arc<Mutex<Option<String>>>,
-    ctx: &egui::Context,
-) -> (Option<Output>, rtrb::Producer<f32>, Option<String>) {
-    let on_error = {
-        let slot = Arc::clone(output_error);
-        let ctx = ctx.clone();
-        move |e: String| {
-            *slot.lock().unwrap() = Some(e);
-            ctx.request_repaint();
-        }
-    };
-    match Output::open(wanted, Arc::clone(shared), on_error.clone()) {
-        Ok((output, producer)) => (Some(output), producer, None),
-        Err(first) => {
-            if wanted.is_some()
-                && let Ok((output, producer)) = Output::open(None, Arc::clone(shared), on_error)
-            {
-                return (Some(output), producer, Some(format!("{first:#}; using the default device")));
-            }
-            let (producer, _consumer) = rtrb::RingBuffer::<f32>::new(1);
-            (None, producer, Some(format!("no audio output: {first:#}")))
-        }
+fn status_text(view: &View) -> (String, Color32) {
+    if let Some((note, at)) = &view.note
+        && at.elapsed() < NOTE_FOR
+    {
+        return (note.clone(), theme::WARN);
     }
+    let Some(track) = &view.track else {
+        let text = if view.playlist.rows.is_empty() { "" } else { "Stopped" };
+        return (text.into(), theme::LABEL);
+    };
+    if let Some(e) = view.mixer.error.lock().unwrap().clone() {
+        return (e, theme::ERROR);
+    }
+    let render = track.render_state();
+    if let Render::Failed(e) = &render {
+        return (e.clone(), theme::ERROR);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    match render {
+        Render::Rendering { started } => {
+            let frontier = track.stem_frontier();
+            parts.push(format!(
+                "rendering {:.1} s, {} rendered",
+                started.elapsed().as_secs_f64(),
+                fmt_time(frontier as f64 / track.sample_rate as f64)
+            ));
+        }
+        Render::Done { took, rendered } => {
+            parts.push(if !rendered { "from cache".into() } else { format!("rendered in {:.1} s", took.as_secs_f64()) })
+        }
+        Render::Failed(_) => {}
+    }
+    if view.mixer.waiting.load(Ordering::Relaxed) || view.shared.starved.load(Ordering::Relaxed) {
+        parts.push("waiting for the render".into());
+    }
+    if view.mixer.master_bypassed.load(Ordering::Relaxed) {
+        parts.push("master bypassed while faders are moved".into());
+    }
+    if let Some(out) = &view.output
+        && out.sample_rate != track.sample_rate
+    {
+        parts.push(format!("resampling to {} Hz", out.sample_rate));
+    }
+    (parts.join("  \u{00b7}  "), theme::LABEL)
 }
 
 pub fn fmt_time(seconds: f64) -> String {
@@ -997,6 +817,91 @@ pub fn fmt_time(seconds: f64) -> String {
 
 pub fn fmt_db(gain: f32) -> String {
     if gain <= 0.0005 { "-inf dB".into() } else { format!("{:+.1} dB", 20.0 * gain.log10()) }
+}
+
+/// Lays `add` out inside `rect`: one fixed column of a row.
+fn cell<R>(ui: &mut egui::Ui, rect: Rect, layout: Layout, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(layout), add).inner
+}
+
+/// One playlist row: the number (or the play state of the loaded track), the name and the
+/// duration. The whole row is the hit target; an error colours the name and becomes the tooltip.
+fn playlist_row(
+    ui: &mut egui::Ui,
+    i: usize,
+    row: &Row,
+    is_current: bool,
+    is_selected: bool,
+    playing: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
+    let painter = ui.painter_at(rect);
+    if is_selected {
+        painter.rect_filled(rect, 4.0, theme::SURFACE);
+    } else if response.hovered() {
+        painter.rect_filled(rect, 4.0, theme::SURFACE.gamma_multiply(0.6));
+    }
+    let font = egui::FontId::proportional(14.0);
+    let number = if is_current {
+        if playing { "\u{25b6}".to_string() } else { "\u{23f8}".to_string() }
+    } else {
+        format!("{}", i + 1)
+    };
+    let number_color = if is_current { theme::ACCENT } else { theme::LABEL };
+    painter.text(
+        egui::pos2(rect.left() + 26.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        number,
+        font.clone(),
+        number_color,
+    );
+    let duration = row.duration.map(fmt_clock).unwrap_or_default();
+    let duration_galley = painter.layout_no_wrap(duration, font.clone(), theme::LABEL);
+    let duration_left = rect.right() - 6.0 - duration_galley.size().x;
+    painter.galley(
+        egui::pos2(duration_left, rect.center().y - duration_galley.size().y * 0.5),
+        duration_galley,
+        theme::LABEL,
+    );
+    let name_color = if row.error.is_some() {
+        theme::ERROR
+    } else if is_current {
+        theme::ACCENT
+    } else {
+        theme::TEXT
+    };
+    let mut job = egui::text::LayoutJob::simple_singleline(row.name.clone(), font, name_color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((duration_left - rect.left() - 44.0).max(10.0));
+    let name = ui.fonts_mut(|f| f.layout_job(job));
+    painter.galley(egui::pos2(rect.left() + 36.0, rect.center().y - name.size().y * 0.5), name, name_color);
+    match &row.error {
+        Some(e) => response.on_hover_text(e),
+        None => response.on_hover_text(row.path.display().to_string()),
+    }
+}
+
+/// A small toggle that says whether it is on by its fill, not by its text alone.
+fn chip(ui: &mut egui::Ui, text: &str, on: bool, color: Color32) -> egui::Response {
+    let button = if on {
+        egui::Button::new(RichText::new(text).color(theme::ON_ACCENT).strong()).fill(color)
+    } else {
+        egui::Button::new(RichText::new(text).color(theme::LABEL))
+            .fill(theme::SURFACE)
+            .stroke(Stroke::new(1.0, theme::BORDER))
+    };
+    ui.add(button.min_size(Vec2::new(32.0, 24.0)))
+}
+
+/// Minutes and whole seconds, for durations at a glance.
+pub fn fmt_clock(seconds: f64) -> String {
+    let total = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", total / 60, total % 60)
+}
+
+/// A sample rate in kHz without trailing zeros: 48, 44.1.
+fn fmt_khz(rate: u32) -> String {
+    let khz = rate as f64 / 1000.0;
+    if khz.fract() == 0.0 { format!("{khz:.0}") } else { format!("{khz}") }
 }
 
 #[cfg(test)]

@@ -152,6 +152,45 @@ impl Checkpoints {
     }
 }
 
+/// Each pushed chunk's peak per layer, after its fader, keyed like the checkpoints, so the window
+/// shows the level of what is being heard rather than of what was mixed a second ahead of it.
+pub struct Meters {
+    /// `(device frames pushed before the chunk, device frames in it, peak per layer)`.
+    inner: Mutex<VecDeque<(u64, u64, Vec<f32>)>>,
+}
+
+impl Meters {
+    pub fn new() -> Meters {
+        Meters { inner: Mutex::new(VecDeque::new()) }
+    }
+
+    pub fn push(&self, pushed: u64, frames: u64, peaks: Vec<f32>) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.push_back((pushed, frames, peaks));
+        // The ring holds a second; a few seconds of chunks is plenty.
+        while inner.len() > 64 {
+            inner.pop_front();
+        }
+    }
+
+    pub fn clear(&self) {
+        self.inner.lock().unwrap().clear();
+    }
+
+    /// The peaks of the chunk playing when the callback had consumed `consumed` device frames;
+    /// `None` between chunks, before the first and after the last.
+    pub fn at(&self, consumed: u64) -> Option<Vec<f32>> {
+        let inner = self.inner.lock().unwrap();
+        let (pushed, frames, peaks) = inner.iter().rev().find(|(pushed, _, _)| *pushed <= consumed)?;
+        (consumed < pushed + frames).then(|| peaks.clone())
+    }
+}
+
+/// The largest magnitude in a buffer, over every channel.
+pub fn peak(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+}
+
 /// What the window reads about the mixer.
 pub struct Status {
     /// Source frame mixed up to.
@@ -169,6 +208,7 @@ pub struct MixerHandle {
     tx: Sender<Command>,
     pub status: Arc<Status>,
     pub checkpoints: Arc<Checkpoints>,
+    pub meters: Arc<Meters>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -183,11 +223,13 @@ impl MixerHandle {
             error: Mutex::new(None),
         });
         let checkpoints = Arc::new(Checkpoints::new());
+        let meters = Arc::new(Meters::new());
         let worker = Worker {
             rx,
             shared,
             status: Arc::clone(&status),
             checkpoints: Arc::clone(&checkpoints),
+            meters: Arc::clone(&meters),
             producer,
             device_rate: sample_rate,
             device_channels: channels as usize,
@@ -198,7 +240,7 @@ impl MixerHandle {
             .name("syrinx-player-mixer".into())
             .spawn(move || worker.run())
             .expect("spawn the mixer thread");
-        MixerHandle { tx, status, checkpoints, join: Some(join) }
+        MixerHandle { tx, status, checkpoints, meters, join: Some(join) }
     }
 
     pub fn send(&self, command: Command) {
@@ -276,6 +318,7 @@ struct Worker {
     shared: Arc<Shared>,
     status: Arc<Status>,
     checkpoints: Arc<Checkpoints>,
+    meters: Arc<Meters>,
     producer: rtrb::Producer<f32>,
     device_rate: u32,
     device_channels: usize,
@@ -372,6 +415,7 @@ impl Worker {
                 self.flush_ring();
                 self.loaded = None;
                 self.checkpoints.clear();
+                self.meters.clear();
                 self.shared.finished_at.store(u64::MAX, Ordering::Relaxed);
                 self.status.at_end.store(false, Ordering::Relaxed);
                 self.status.waiting.store(false, Ordering::Relaxed);
@@ -416,6 +460,7 @@ impl Worker {
     /// and the end marker.
     fn begin(&mut self) {
         self.checkpoints.clear();
+        self.meters.clear();
         self.shared.finished_at.store(u64::MAX, Ordering::Relaxed);
         self.status.at_end.store(false, Ordering::Relaxed);
         *self.status.error.lock().unwrap() = None;
@@ -508,6 +553,10 @@ impl Worker {
                         n,
                         &mut l.mixed,
                     )?;
+                    // The canonical mix plays; the layers are read for their meters only.
+                    for (file, buf) in track.stems.iter().zip(l.stems.iter_mut()) {
+                        file.read_frames(position, n, buf)?;
+                    }
                 }
                 Form::Live => {
                     let Some(mixer) = l.live.as_mut() else {
@@ -555,6 +604,12 @@ impl Worker {
             return Step::Continue;
         }
         self.status.master_bypassed.store(matches!(form, Form::Whole) && !unity, Ordering::Relaxed);
+        // Each layer's peak after its fader, for the meters: the live path read the layers
+        // already gained, the others read them as rendered.
+        let peaks: Vec<f32> = match form {
+            Form::Live => l.stems.iter().map(|s| peak(s)).collect(),
+            _ => l.stems.iter().zip(&gains).map(|(s, g)| peak(s) * g.abs()).collect(),
+        };
 
         // A seek inside a block: the chunk starts part-way through.
         let in_channels = track.channels as usize;
@@ -600,6 +655,7 @@ impl Worker {
         }
         let l = self.loaded.as_mut().expect("still loaded");
         self.checkpoints.push(l.pushed, source_frame);
+        self.meters.push(l.pushed, out_frames as u64, peaks);
         if let Ok(chunk) = self.producer.write_chunk_uninit(needed) {
             chunk.fill_from_iter(l.fanned.iter().copied());
         }
@@ -807,6 +863,21 @@ mod tests {
         let expected = &want.samples[target * 2..target * 2 + out.len()];
         let worst = out.iter().zip(expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst < 1e-4, "post-seek audio differs from the canonical render by {worst}");
+    }
+
+    #[test]
+    fn meters_report_the_chunk_being_heard() {
+        let m = Meters::new();
+        assert_eq!(m.at(0), None, "nothing pushed yet");
+        m.push(0, 4096, vec![0.5, 0.25]);
+        m.push(4096, 4096, vec![1.0, 0.0]);
+        assert_eq!(m.at(100), Some(vec![0.5, 0.25]));
+        assert_eq!(m.at(4096), Some(vec![1.0, 0.0]), "a chunk starts where the one before ends");
+        assert_eq!(m.at(8191), Some(vec![1.0, 0.0]));
+        assert_eq!(m.at(8192), None, "past the last chunk there is no level, not the last one held");
+        m.clear();
+        assert_eq!(m.at(100), None);
+        assert_eq!(peak(&[0.25, -0.75, 0.5]), 0.75);
     }
 
     #[test]
