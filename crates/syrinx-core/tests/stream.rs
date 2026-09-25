@@ -573,3 +573,54 @@ fn the_source_reports_what_it_opened() {
     assert_eq!(stems.iter().map(|s| s.name()).collect::<Vec<_>>(), vec!["pad", "tone"]);
     assert_eq!(stems.iter().map(|s| s.streaming()).collect::<Vec<_>>(), vec![false, true]);
 }
+
+/// The framework's master chain, restarted part-way through a mix stream (a player's seek):
+/// every sample it produces is finite from the first block, and once its state has warmed it
+/// is the canonical mix again.
+#[test]
+fn the_master_chain_restarts_mid_stream() {
+    let src = r#"
+import { layer, input, addInto } from "./framework/music.js";
+import { master } from "./framework/master.js";
+export const meta = { api: 4, duration: 3, channels: 2 };
+export const stems = { tone(ctx) { return [new Float32Array(ctx.frames), new Float32Array(ctx.frames)]; } };
+export default function (ctx) {
+  const mix = layer(ctx);
+  addInto(mix, input(mix, "tone"), 1);
+  return master(ctx, mix, { trim: 0.92, fade: 0.5 });
+}
+"#;
+    let source = Source::open(src, &in_project("restart.syr"), &opts()).unwrap();
+    let frames = source.frames();
+    let rate = source.sample_rate() as f32;
+    // A loud tone that keeps the limiter and the compressor working.
+    let tone: Vec<f32> = (0..frames)
+        .flat_map(|i| {
+            let v = 0.95 * (i as f32 * 2.0 * std::f32::consts::PI * 110.0 / rate).sin();
+            [v, v]
+        })
+        .collect();
+    let mut mixer = source.mixer(&Target::Mix).unwrap();
+    assert!(mixer.streaming());
+    let canonical = mixer.mix_all(&[&tone]).unwrap().samples;
+
+    let from = 20 * BLOCK_FRAMES;
+    mixer.restart(from).unwrap();
+    let mut offset = from;
+    let mut out = Vec::new();
+    while offset < frames {
+        let n = BLOCK_FRAMES.min(frames - offset);
+        let block = mixer
+            .mix(offset, &[&tone[offset * 2..(offset + n) * 2]])
+            .unwrap_or_else(|e| panic!("the block at frame {offset} after a restart at {from}: {}", e.message));
+        assert!(block.samples.iter().all(|s| s.is_finite()), "non-finite output in the block at frame {offset}");
+        out.extend_from_slice(&block.samples);
+        offset += n;
+    }
+    assert_eq!(out.len(), (frames - from) * 2);
+    // A second in, the restarted chain has forgotten its cold start.
+    let warm = 48_000 * 2;
+    let worst =
+        out[warm..].iter().zip(&canonical[from * 2 + warm..]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 1e-3, "the restarted mix differs from the canonical one by {worst} after warming up");
+}

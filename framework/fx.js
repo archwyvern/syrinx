@@ -279,11 +279,12 @@ function limitStream(ceil, la, rC) {
   const D = la + 8;
   const CAP = 3 * 4096 + D;
   const inL = new Float32Array(CAP), inR = new Float32Array(CAP), raw = new Float32Array(CAP), g = new Float32Array(CAP);
-  let winStart = 0; // absolute frame of inL[0]
-  let have = 0;     // frames held: [winStart, winStart + have)
-  let prev = 1;     // the forward pass's release state, across blocks
+  let winStart = -1; // absolute frame of inL[0]: the first block's, which is not 0 after a restart
+  let have = 0;      // frames held: [winStart, winStart + have)
+  let prev = 1;      // the forward pass's release state, across blocks
   return function (planes, offset, n) {
     const L = planes[0], R = planes[1];
+    if (winStart < 0) winStart = offset;
     if (have + n > CAP) {
       // Drop what the outputs of this block can no longer reach: everything before the first
       // frame this block emits, minus nothing (the forward pass has consumed it).
@@ -307,10 +308,11 @@ function limitStream(ceil, la, rC) {
       if (v < g[i]) g[i] = v;
     }
     // The forward pass, in order, over the frames this block emits: input frame j - D for
-    // output frame j.
+    // output frame j. Before the window (the first D frames of a start or a restart) the delay
+    // line is empty: silence.
     for (let k = 0; k < n; k++) {
       const src = offset + k - D;
-      if (src < 0) { L[k] = 0; R[k] = 0; continue; }
+      if (src < winStart) { L[k] = 0; R[k] = 0; continue; }
       const idx = src - winStart;
       const rec = prev + (1 - prev) * rC;
       const v = g[idx] < rec ? g[idx] : rec;
