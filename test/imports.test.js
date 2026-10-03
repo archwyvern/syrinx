@@ -17,6 +17,19 @@ test("both static forms are found; comments are not imports and strings are kept
   assert.deepEqual(scanImports(src).map((i) => i.specifier), ["syrinx", "./side.js", "./b.js"]);
 });
 
+test("a string that reads from or import is not an import", () => {
+  // the words in a literal, followed by another literal: the gap between the two is no specifier
+  const src = [
+    'import { a } from "./a.js";',
+    'const w = table(opt(p, "from", "glass"), f0);',
+    "const v = ['from', 'to'];",
+    'const s = "import " + "x";',
+    "",
+  ].join("\n");
+  assert.deepEqual(scanImports(src).map((i) => i.specifier), ["./a.js"]);
+  assert.equal(rewriteImports(src, () => "/p.js"), src.replace('"./a.js"', '"/p.js"'));
+});
+
 test("a rewrite splices each import once, in one pass", () => {
   const src = 'import { a } from "./a.js";\nimport { b } from "./a.js.js";\n';
   const out = rewriteImports(src, (s) => (s === "./a.js" ? "./a.js.js" : "/x.js"));

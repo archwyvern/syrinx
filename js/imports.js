@@ -2,8 +2,9 @@
 // them. Both forms: `... from "x"` (which covers `export ... from "x"`) and the side-effect
 // `import "x"` -- the Rust host loads whatever V8's resolve callback is handed, so leaving either out
 // would make a legal source load there and fail here. Found on the source with comments blanked and
-// strings kept: a specifier is a string, and prose in a comment is not an import. Positions are
-// UTF-16 offsets into the original, so a rewrite splices the original text.
+// strings kept: a specifier is a string, and prose in a comment is not an import -- nor is a `from`
+// or `import` inside a string literal. Positions are UTF-16 offsets into the original, so a rewrite
+// splices the original text.
 //
 // Dynamic import() is not an import here; no host supports it (SPEC.md, clause 8).
 
@@ -20,7 +21,10 @@ const IMPORTS = /(\bfrom\s*|\bimport\s+)(["'])([^"']+)\2/g;
  */
 export function scanImports(source) {
   const scanned = strip(source, { preserveUtf16: true, keepStrings: true });
-  return [...scanned.matchAll(IMPORTS)].map((m) => ({
+  // The keyword must be code, not the inside of a literal: `opt(p, "from", "x")` would otherwise read
+  // as `from ", "`. With the literals blanked as well the keyword is still there only if it was code.
+  const code = strip(source, { preserveUtf16: true });
+  return [...scanned.matchAll(IMPORTS)].filter((m) => code.startsWith(m[1].trimEnd(), m.index)).map((m) => ({
     specifier: m[3],
     index: m.index,
     length: m[0].length,
