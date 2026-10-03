@@ -454,7 +454,7 @@ Releases are tags, `vMAJOR.MINOR.PATCH`; the package, the crates and `syrinx inf
 number. Depend on a tag rather than a branch:
 
 ```json
-"syrinx": "github:archwyvern/syrinx#v0.9.0"
+"syrinx": "github:archwyvern/syrinx#v0.9.1"
 ```
 
 A new standard -- a changed prelude, math or run wrapper -- can change what an unchanged source
