@@ -12,7 +12,7 @@
 // peak. Reading ctx.stems here would make it a whole-buffer master; the blocks arrive as the
 // third argument instead.
 import { hash } from "syrinx";
-import { Osc, Noise, Env, Biquad, OnePole, stream, render, normalize, softclip, mix, gain, filter } from "../framework/dsp.js";
+import { Osc, Noise, Env, Biquad, OnePole, stream, render, normalize, softclip, mix, gain, filter } from "./lib/dsp.js";
 
 export const meta = { api: 4, name: "beacon", duration: 3, channels: 2, seed: 9 };
 

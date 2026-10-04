@@ -5,9 +5,9 @@ right.
 
 This document is normative. A requirement is marked **Must.**, a prohibition **May not.**, and an
 explanation that is not itself a requirement **Note.** Everything else is commentary. The API
-reference it cites is generated from the declarations (`prelude/syrinx.d.ts` for the core and the
-framework's own) into [`docs/API.md`](docs/API.md) and `docs/syrinx-docs.json`; nothing in it is
-written by hand. This text is the standard syrinx 0.9.1 implements: contract version 4.
+reference it cites is generated from the core's declarations (`prelude/syrinx.d.ts`) into
+[`docs/API.md`](docs/API.md) and `docs/syrinx-docs.json`; nothing in it is written by hand. This text
+is the standard syrinx 0.10.0 implements: contract version 4.
 
 <a id="scope"></a>
 
@@ -57,7 +57,7 @@ may default-export a function that combines the layers into the finished sound. 
 `stems` is a layer.
 
 ```js title="a complete source"
-import { Osc, Env, render } from "./framework/dsp.js";
+import { Osc, Env, render } from "./lib/dsp.js";
 
 export const meta = { api: 4, name: "ping", duration: 0.4, channels: 1, seed: 3 };
 
@@ -70,8 +70,8 @@ export const stems = {
 };
 ```
 
-The oscillator, the envelope and `render` come from the framework, which the project keeps beside
-its sources (clause 13); the core is what `"syrinx"` itself provides (clause 12).
+The oscillator, the envelope and `render` come from the project's own library, kept beside its
+sources (clause 13); the core is what `"syrinx"` itself provides (clause 12).
 
 `meta` is an object. Every field is optional except `api` and `duration`, and a field set to
 `undefined` is absent:
@@ -164,7 +164,7 @@ and returned a function, it is a mix stream.
 > **May not.** A mix stream may not read `ctx.stems`. Its layers arrive as the third argument,
 > `(offset, frames, stems)`, where `stems[name]` is that layer's block.
 
-Code that needs the entire render -- the framework's `normalize`, `fade` and `place`, say -- asks
+Code that needs the entire render -- a library's `normalize`, `fade` and `place`, say -- asks
 the core's `inBlock()` and refuses inside a block. The flag behind it is frozen and its getter
 closes over a variable private to the run wrapper, so a source can read it but never set it.
 
@@ -296,7 +296,7 @@ because a source that says which contract it was written against cannot be read 
 later host. A host accepts a range, from `API_FLOOR` to `PRELUDE_VERSION`, and the check is binary:
 in range it compiles, out of range it fails with a contract error naming both.
 
-syrinx 0.9.1 implements contract 4 and accepts 4 alone: 0.9 moved everything that was not the
+syrinx 0.10.0 implements contract 4 and accepts 4 alone: 0.9 moved everything that was not the
 standard out of the prelude and broke with every earlier contract. The range widens again only for
 an additive change, so that a source written against one contract stays valid under the next.
 
@@ -330,37 +330,31 @@ them with the contract's types, listed under "The core module" in [`docs/API.md`
 
 <!-- reference: core -->
 
-<a id="framework"></a>
+<a id="library"></a>
 
-## 13. The framework
+## 13. A project's own code
 
-Everything else a sound is made of -- oscillators, envelopes, filters, delays, the buffer helpers,
-the arrangement engine, effects and instruments -- is not part of this standard. It is the
-framework, `framework/` in the reference implementation's repository: a library a project chooses,
-the way it chooses any library. Its primitives are listed under "The framework" in
-[`docs/API.md`](docs/API.md).
+Everything else a sound is made of -- oscillators, envelopes, filters, delays, buffer helpers, an
+arrangement engine, effects and instruments -- is not part of this standard. It is the project's
+own code: its sources and whatever library it keeps beside them, written by it or copied from
+wherever it likes.
 
-> **Must.** A host never ships the framework and never evaluates it. Nothing in this section is
-> required of a conforming implementation.
+> **Must.** A host never ships such a library and never evaluates one on its own account. Nothing in
+> this section is required of a conforming implementation.
 
 The reason for the line is what a host must know. A host implements the contract, drives the block
 protocol and honours the whole-render helpers. It never needs to know that `Biquad` exists. Anything
 on the far side of that question is somebody's library, and a standard that carries a library
 carries it forever.
 
-The framework is developed in the same repository as the reference host — they move together and
-are tested together — but it is its own package (`syrinx-framework`, versioned with the repository),
-distributed on its own: `syrinx framework <dir>` writes a copy into a project, with a `VERSION` file
-naming the release it came from. A source that calls the framework depends on it as firmly as on the
-standard, and that dependency is tracked the same way everything else is: by what the source
-renders to, not by a number either side declares.
+A source that calls its project's library depends on it as firmly as on the standard, and that
+dependency is tracked the way everything else is: by what the source renders to (`syrinx hash`),
+not by a number either side declares. A function a published sound calls is as binding, once
+released, as the core: a better voice is a new name beside the old one, so that changing the library
+can add sound but never alter a sound someone approved.
 
-A framework function, once released, never changes what it renders. A better voice is a new name
-beside the old one, so that updating a project's copy can add sound but never alter a sound
-someone approved.
-
-> **Must.** An album project imports the framework by relative path, because clause 8 admits only
-> `"syrinx"` and relative specifiers. The framework therefore lives under the project root like any
+> **Must.** A project imports its library by relative path, because clause 8 admits only
+> `"syrinx"` and relative specifiers. The library therefore lives under the project root like any
 > other source of the project.
 
 > **Note.** That constraint is deliberate and worth keeping. Admitting bare specifiers would pull a
@@ -370,13 +364,14 @@ someone approved.
 > directory to avoid it entirely.
 
 > **Note.** The boundary is pinned by the reference implementation's tests: the names `"syrinx"`
-> exports, and the names the framework's `dsp.js` exports, are each a list a change to which is a
-> change to the standard, made on purpose.
+> exports are a list a change to which is a change to the standard, made on purpose.
 
-Bit-exactness is not relaxed here. A framework function is as binding as a core one for any source
+> **Note.** Until 0.10 the reference implementation carried a framework of its own and vendored it
+> into projects. It carries none now; its examples keep the primitives they use in
+> `examples/lib/dsp.js`, which a project may copy like any other code.
+
+Bit-exactness is not relaxed here. A library function is as binding as a core one for any source
 that calls it. The difference is only whose problem it is to ship.
-
-<!-- reference: framework -->
 
 <a id="testing"></a>
 

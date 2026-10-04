@@ -21,7 +21,7 @@ export default // syrinx run wrapper -- how a source's layers become audio, whol
 // itself, so a host cannot pull a wrong-sized block, and refuses an offset out of sequence, so a
 // host bug fails loudly instead of rendering something. Around every block call the flag behind
 // `__syrinx.block` is raised: the prelude's `inBlock()` reads it, and code that needs the whole
-// render (the framework's normalize, fade and place) asks that and refuses inside a block. The
+// render (a library's normalize, fade or place) asks that and refuses inside a block. The
 // global is frozen and the getter reads a variable of this scope, so nothing outside this file
 // can set it.
 //

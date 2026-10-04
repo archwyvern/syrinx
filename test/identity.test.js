@@ -29,8 +29,8 @@ import { render, renderEach } from "../js/index.js";
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLI = process.env.SYRINX_CLI ?? join(REPO, "target", "release", "syrinx");
 const EXAMPLES = join(REPO, "examples");
-// The examples are a project whose framework is the repository's own ../framework, so the jail is
-// the repository: the same shape as an album with its vendored copy beside its tracks.
+// The examples are a project with its own library (examples/lib); the jail is the repository, which
+// holds it.
 
 /** The Rust host's samples, via the CLI's raw float output. */
 function rustSamples(sourcePath, extra = []) {

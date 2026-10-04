@@ -39,10 +39,11 @@ function project(files) {
   return root;
 }
 
-/** A project with the framework vendored at ./framework, as `syrinx framework` would leave it. */
-function withFramework(files) {
+/** A project with a library at ./lib: the examples' dsp.js, as a project keeps its own. */
+function withLibrary(files) {
   const root = project(files);
-  cpSync(join(REPO, "framework"), join(root, "framework"), { recursive: true });
+  mkdirSync(join(root, "lib"), { recursive: true });
+  cpSync(join(REPO, "examples", "lib", "dsp.js"), join(root, "lib", "dsp.js"));
   return root;
 }
 
@@ -204,8 +205,8 @@ test("an import that cannot resolve fails the same way on both hosts, naming the
   }
 });
 
-test("a framework name taken from the core is a compile error naming it, on both hosts", async () => {
-  // The mistake every 0.4 source makes on 0.9. The Rust host's V8 names the module as the source
+test("a name the core does not export is a compile error naming it, on both hosts", async () => {
+  // The mistake every 0.4 source makes on 0.9 and later. The Rust host's V8 names the module as the source
   // wrote it; the Node host maps its own URL for the prelude back to "syrinx" so the two agree.
   const root = project({ "a.syr": 'import { Osc } from "syrinx";\n' + TONE });
   const message = "The requested module 'syrinx' does not provide an export named 'Osc'";
@@ -285,8 +286,8 @@ test("a layer that streams renders block by block to what render() gives", async
   // The same stateful per-sample function through render() and through stream(): the block
   // driver in the worker must pull the same blocks in the same order as the Rust host, and both
   // must equal the whole render.
-  const root = withFramework({
-    "a.syr": 'import { Osc, Biquad, render, stream } from "./framework/dsp.js";\n'
+  const root = withLibrary({
+    "a.syr": 'import { Osc, Biquad, render, stream } from "./lib/dsp.js";\n'
       + 'export const meta = { api: 4, name: "t", duration: 0.3, channels: 1, seed: 1 };\n'
       + "const voice = (ctx) => { const o = Osc.saw(ctx.sr); const f = Biquad.lowpass(ctx.sr, 900, 2); return (t) => f.process(o.next(110 + 40 * t)); };\n"
       + "export const stems = { whole: (ctx) => render(ctx, voice(ctx)), streamed: (ctx) => stream(ctx, voice(ctx)) };\n",
@@ -342,8 +343,8 @@ test("a mix that reads ctx.stems and returns a stream names the mistake, on both
 
 test("the whole-render helpers refuse inside a block, on both hosts", async () => {
   for (const [call, fix] of [["normalize(out)", /limiter/], ["fade(ctx, out, 0.01, 0.01)", /Env\.gate/], ["place(ctx, out, 0)", /- offset/]]) {
-    const root = withFramework({
-      "a.syr": 'import { normalize, fade, place } from "./framework/dsp.js";\n'
+    const root = withLibrary({
+      "a.syr": 'import { normalize, fade, place } from "./lib/dsp.js";\n'
         + 'export const meta = { api: 4, name: "t", duration: 0.1, channels: 1, seed: 1 };\n'
         + `export const stems = { a(ctx) { return (offset, frames) => { const out = new Float32Array(frames); return ${call}; }; } };\n`,
     });

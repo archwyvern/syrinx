@@ -1,7 +1,6 @@
-// The syrinx framework's dsp module: the primitives a sound is made of. A project imports them by
-// relative path from wherever it vendored the framework: `import { Osc, Env } from
-// "./framework/dsp.js"`. These declarations are for editors and the generated reference; the
-// module is plain JavaScript.
+// The examples' dsp module: the primitives their sounds are made of, imported by relative path:
+// `import { Osc, Env } from "./lib/dsp.js"`. These declarations are for editors; the module is
+// plain JavaScript, and a project of its own copies what it wants of it.
 
 import type { Context, Stream } from "syrinx";
 

@@ -1,6 +1,5 @@
 //! The standard on its own: a fresh isolate with the math and the prelude evaluated, for the
-//! checks that read what the prelude (or a framework module) exports and what block size each file
-//! declares.
+//! checks that read what the prelude exports and what block size each file declares.
 
 use std::collections::HashMap;
 
@@ -19,9 +18,8 @@ pub fn prelude_exports() -> Result<Vec<String>, Error> {
 }
 
 /// The names a module exports at run time, evaluated in a fresh isolate after the standard math
-/// with the prelude behind `"syrinx"` -- how a framework module's declarations are checked. The
-/// module may import the core and nothing else.
-pub fn module_exports(specifier: &str, code: &str) -> Result<Vec<String>, Error> {
+/// with the prelude behind `"syrinx"`. The module may import the core and nothing else.
+fn module_exports(specifier: &str, code: &str) -> Result<Vec<String>, Error> {
     on_own_thread(|| {
         with_module(code, specifier, |scope, namespace| {
             let names = namespace

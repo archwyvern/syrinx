@@ -10,19 +10,23 @@ fn opts() -> RenderOptions {
     RenderOptions::default()
 }
 
+/// The examples' dsp module: the library the test projects import, as a project brings its own.
+const DSP: &str = include_str!("../../../examples/lib/dsp.js");
+
 fn only(stems: &[&str]) -> RenderOptions {
     RenderOptions { target: Target::Stems(stems.iter().map(|s| s.to_string()).collect()), ..opts() }
 }
 
-/// The path of a source named `file` in a project with the framework vendored at ./framework.
-/// The host resolves an entry's imports from its path, so a source can use the framework whether
-/// or not the file itself is written. One project per test process.
+/// The path of a source named `file` in a project with a library at ./lib (the examples' dsp.js).
+/// The host resolves an entry's imports from its path, so a source can use the library whether or
+/// not the file itself is written. One project per test process.
 fn in_project(file: &str) -> String {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     let dir = DIR.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("syrinx-stream-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        syrinx_core::framework::vendor(&dir.join("framework"), "test").unwrap();
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/dsp.js"), DSP).unwrap();
         dir
     });
     dir.join(file).to_string_lossy().into_owned()
@@ -31,7 +35,7 @@ fn in_project(file: &str) -> String {
 /// The streaming fixture: a per-sample stream, a hand-written block function with setup-time
 /// whole-buffer work, an api-2 whole layer beside them, and a mix stream with filter state.
 const STREAMED: &str = r#"
-import { Osc, stream, render, mix, gain, Biquad, filter, normalize } from "./framework/dsp.js";
+import { Osc, stream, render, mix, gain, Biquad, filter, normalize } from "./lib/dsp.js";
 export const meta = { api: 4, name: "s", duration: 0.5, channels: 2, seed: 3 };
 export const stems = {
   tone(ctx) { const o = Osc.sine(ctx.sr); return stream(ctx, () => o.next(220) * 0.5); },
@@ -57,7 +61,7 @@ export default function (ctx) {
 
 /// The same layers written whole, and the same mix over whole planes: what STREAMED must equal.
 const WHOLE: &str = r#"
-import { Osc, render, mix, gain, Biquad, filter, normalize } from "./framework/dsp.js";
+import { Osc, render, mix, gain, Biquad, filter, normalize } from "./lib/dsp.js";
 export const meta = { api: 4, name: "s", duration: 0.5, channels: 2, seed: 3 };
 export const stems = {
   tone(ctx) { const o = Osc.sine(ctx.sr); return render(ctx, () => o.next(220) * 0.5); },
@@ -96,7 +100,7 @@ fn drain(stream: &mut Stream) -> Vec<f32> {
 fn stream_is_bit_identical_to_render() {
     // The same stateful per-sample function, once through render() and once through stream().
     let src = r#"
-import { Osc, Biquad, render, stream } from "./framework/dsp.js";
+import { Osc, Biquad, render, stream } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.3, channels: 1 };
 const voice = (ctx) => { const o = Osc.saw(ctx.sr); const f = Biquad.lowpass(ctx.sr, 900, 2); return (t) => f.process(o.next(110 + 40 * t)); };
 export const stems = {
@@ -153,7 +157,7 @@ fn the_block_sum_equals_the_whole_sum() {
 #[test]
 fn a_single_streaming_layer_needs_no_mix_stage() {
     let src = r#"
-import { stream } from "./framework/dsp.js";
+import { stream } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.2, channels: 1 };
 export const stems = { a(ctx) { return stream(ctx, (t, i) => (i % 5) / 10); } };
 "#;
@@ -346,7 +350,7 @@ fn whole_render_helpers_refuse_inside_a_block() {
         [("normalize(out)", "limiter"), ("fade(ctx, out, 0.01, 0.01)", "Env.gate"), ("place(ctx, out, 0)", "- offset")]
     {
         let src = format!(
-            "import {{ normalize, fade, place }} from \"./framework/dsp.js\";\nexport const meta = {{ api: 4, duration: 0.1, channels: 1 }};\n\
+            "import {{ normalize, fade, place }} from \"./lib/dsp.js\";\nexport const meta = {{ api: 4, duration: 0.1, channels: 1 }};\n\
              export const stems = {{ a(ctx) {{ return (offset, frames) => {{ const out = new Float32Array(frames); return {call}; }}; }} }};\n"
         );
         let e = render(&src, &in_project("x.syr"), &opts()).unwrap_err();
@@ -355,7 +359,7 @@ fn whole_render_helpers_refuse_inside_a_block() {
     }
     // In setup, before the stream is returned, all three are as legal as ever.
     let src = r#"
-import { normalize, fade, place, render } from "./framework/dsp.js";
+import { normalize, fade, place, render } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.1, channels: 1 };
 export const stems = { a(ctx) {
   const hit = place(ctx, fade(ctx, normalize(render({ ...ctx, frames: 100 }, () => 0.25)), 0.0001, 0.0001), 0.01);
@@ -522,7 +526,7 @@ export const stems = { a(ctx) { return (offset, frames) => { if (offset === 8192
 #[test]
 fn a_paused_consumer_does_not_trip_the_block_budget() {
     let src = r#"
-import { stream } from "./framework/dsp.js";
+import { stream } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 1, channels: 1 };
 export const stems = { a(ctx) { return stream(ctx, (t) => t); } };
 "#;
@@ -567,33 +571,40 @@ fn the_source_reports_what_it_opened() {
     assert_eq!(source.frames(), 24_000);
     assert!(source.has_mix());
     assert_eq!(source.stem_names(), &["tone".to_string(), "hits".to_string(), "pad".to_string()]);
-    assert_eq!(source.dependencies().len(), 1, "the framework, and nothing else");
-    assert!(source.dependencies()[0].ends_with("framework/dsp.js"));
+    assert_eq!(source.dependencies().len(), 1, "the library, and nothing else");
+    assert!(source.dependencies()[0].ends_with("lib/dsp.js"));
     let stems = source.stems(&["pad", "tone"]).unwrap();
     assert_eq!(stems.iter().map(|s| s.name()).collect::<Vec<_>>(), vec!["pad", "tone"]);
     assert_eq!(stems.iter().map(|s| s.streaming()).collect::<Vec<_>>(), vec![false, true]);
 }
 
-/// The framework's master chain, restarted part-way through a mix stream (a player's seek):
-/// every sample it produces is finite from the first block, and once its state has warmed it
-/// is the canonical mix again.
+/// A mix stream with state -- an envelope follower driving a gain, the shape of a limiter --
+/// restarted part-way through (a player's seek): every sample it produces is finite from the
+/// first block, and once its state has warmed it is the canonical mix again.
 #[test]
-fn the_master_chain_restarts_mid_stream() {
+fn a_stateful_mix_restarts_mid_stream() {
     let src = r#"
-import { layer, input, addInto } from "./framework/music.js";
-import { master } from "./framework/master.js";
 export const meta = { api: 4, duration: 3, channels: 2 };
 export const stems = { tone(ctx) { return [new Float32Array(ctx.frames), new Float32Array(ctx.frames)]; } };
 export default function (ctx) {
-  const mix = layer(ctx);
-  addInto(mix, input(mix, "tone"), 1);
-  return master(ctx, mix, { trim: 0.92, fade: 0.5 });
+  let env = 0;
+  return (offset, frames, stems) => {
+    const [l, r] = stems.tone;
+    const outL = new Float32Array(frames), outR = new Float32Array(frames);
+    for (let k = 0; k < frames; k++) {
+      const a = Math.max(Math.abs(l[k]), Math.abs(r[k]));
+      env = a > env ? a : env + (a - env) * 0.0005;
+      const g = env > 0.5 ? 0.5 / env : 1;
+      outL[k] = l[k] * g; outR[k] = r[k] * g;
+    }
+    return [outL, outR];
+  };
 }
 "#;
     let source = Source::open(src, &in_project("restart.syr"), &opts()).unwrap();
     let frames = source.frames();
     let rate = source.sample_rate() as f32;
-    // A loud tone that keeps the limiter and the compressor working.
+    // A loud tone that keeps the gain working.
     let tone: Vec<f32> = (0..frames)
         .flat_map(|i| {
             let v = 0.95 * (i as f32 * 2.0 * std::f32::consts::PI * 110.0 / rate).sin();

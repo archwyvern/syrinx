@@ -42,7 +42,7 @@ function rustSamples(sourcePath) {
 }
 
 /**
- * The examples and the framework they import, as a page would serve them: every module's
+ * The examples and the library they import, as a page would serve them: every module's
  * `"syrinx"` rewritten to the prelude's URL by syrinx/imports, relative imports left relative (they
  * resolve to files beside them), sources renamed to .mjs so the realm loads them as modules.
  * Returns the served examples directory.
@@ -50,7 +50,6 @@ function rustSamples(sourcePath) {
 function served() {
   const dir = mkdtempSync(join(tmpdir(), "syrinx-browser-src-"));
   cpSync(EXAMPLES, join(dir, "examples"), { recursive: true, filter: (p) => !p.includes("/out") });
-  cpSync(join(REPO, "framework"), join(dir, "framework"), { recursive: true });
   writeFileSync(join(dir, "package.json"), '{ "type": "module" }\n');
   const rewrite = (file) => {
     const text = rewriteImports(readFileSync(file, "utf8"), (s) => (s === "syrinx" ? PRELUDE : s));

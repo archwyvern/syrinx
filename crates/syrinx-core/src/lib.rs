@@ -13,7 +13,6 @@
 pub mod analyze;
 pub mod check;
 pub mod docs;
-pub mod framework;
 mod host;
 pub mod wav;
 

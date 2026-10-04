@@ -18,7 +18,7 @@ test("docs/API.md is current", () => {
 
 test("SPEC.md names every reference section it cites", () => {
   const spec = readFileSync(join(REPO, "SPEC.md"), "utf8");
-  for (const marker of ["<!-- reference: core -->", "<!-- reference: framework -->"]) {
+  for (const marker of ["<!-- reference: core -->"]) {
     assert.ok(spec.includes(marker), `SPEC.md has lost ${marker}`);
   }
 });

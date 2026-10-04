@@ -3,7 +3,7 @@
 //
 // The filter and the wobble are the master's, because they act on the sum: audition `--stem
 // rumble` to hear what is under the pulses, and the mix to hear what the cabinet does to both.
-import { Osc, Noise, Svf, OnePole, render, normalize, db } from "../framework/dsp.js";
+import { Osc, Noise, Svf, OnePole, render, normalize, db } from "./lib/dsp.js";
 
 export const meta = { api: 4, name: "engine", duration: 2.0, channels: 1, loop: true };
 

@@ -1,12 +1,10 @@
 //! The API reference, extracted from type declarations: the core module's (`prelude/syrinx.d.ts`,
-//! [`TYPES`]) and the framework's (`framework/dsp.d.ts`).
+//! [`TYPES`]), the whole of what the standard provides (SPEC.md, clause 12).
 //!
-//! Each declarations file is the declared surface of one module, with a doc comment on every
-//! export and `// ---- Name` markers dividing it into sections. [`docs`] turns them into structured
-//! JSON for a documentation site to render, and checks each against its module's real exports so
-//! the two cannot drift apart unnoticed. Which part of the reference an entry belongs to -- the
-//! standard's core module (SPEC.md, clause 12) or the framework (clause 13) -- is decided by the
-//! file it is declared in.
+//! A declarations file is the declared surface of one module, with a doc comment on every export
+//! and `// ---- Name` markers dividing it into sections. [`docs`] turns it into structured JSON for
+//! a documentation site to render, and checks it against the module's real exports so the two
+//! cannot drift apart unnoticed.
 //!
 //! The parser is deliberately strict: a line it does not recognise is an error, not a skip.
 //! Silently dropping an export would produce documentation that is quietly incomplete, which is
@@ -17,8 +15,9 @@ use serde::Serialize;
 use crate::{API_FLOOR, BLOCK_FRAMES, Error, PRELUDE_VERSION, TYPES};
 
 /// Version of this JSON shape. 3 replaced the `core` flag on entries with modules, each a part of
-/// the reference: the core, or the framework.
-pub const DOCS_SCHEMA: u32 = 3;
+/// the reference; 4 is syrinx 0.10, which carries no framework: the core module alone, and a
+/// module no longer names its part.
+pub const DOCS_SCHEMA: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,16 +92,6 @@ pub struct Group {
     pub entries: Vec<Entry>,
 }
 
-/// Which part of the reference a module is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Part {
-    /// The standard's core module: what a conforming host must know about (SPEC.md, clause 12).
-    Core,
-    /// The framework: a library a project vendors, never required of a host (SPEC.md, clause 13).
-    Framework,
-}
-
 /// One declarations file, parsed: the module's summary and its sections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,10 +105,8 @@ pub struct Declarations {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleDocs {
-    /// How a source reaches it: `"syrinx"`, or the framework path relative to where a project
-    /// vendored it (`framework/dsp.js`).
+    /// How a source reaches it: `"syrinx"`.
     pub module: String,
-    pub part: Part,
     pub summary: String,
     pub groups: Vec<Group>,
 }
@@ -138,22 +125,13 @@ pub struct Docs {
     pub api_floor: u32,
     /// Frames per block of a stream, a constant of the standard.
     pub block_frames: usize,
-    /// The core module first, then the framework's.
+    /// The core module.
     pub modules: Vec<ModuleDocs>,
 }
 
 /// Extracts the reference and verifies every module's declarations against its real exports.
 pub fn docs() -> Result<Docs, Error> {
-    let core = verified("syrinx", Part::Core, parse(TYPES)?, crate::host::prelude_exports()?)?;
-    let file = |path: &str| {
-        crate::framework::file(path).ok_or_else(|| Error::internal(format!("framework/{path} is not embedded")))
-    };
-    let dsp = verified(
-        "framework/dsp.js",
-        Part::Framework,
-        parse(file("dsp.d.ts")?)?,
-        crate::host::module_exports("framework/dsp.js", file("dsp.js")?)?,
-    )?;
+    let core = verified("syrinx", parse(TYPES)?, crate::host::prelude_exports()?)?;
     Ok(Docs {
         schema: DOCS_SCHEMA,
         generator: "syrinx",
@@ -161,12 +139,12 @@ pub fn docs() -> Result<Docs, Error> {
         api: PRELUDE_VERSION,
         api_floor: API_FLOOR,
         block_frames: BLOCK_FRAMES,
-        modules: vec![core, dsp],
+        modules: vec![core],
     })
 }
 
 /// The module's reference, once its declared values are exactly its exports.
-fn verified(module: &str, part: Part, declared: Declarations, actual: Vec<String>) -> Result<ModuleDocs, Error> {
+fn verified(module: &str, declared: Declarations, actual: Vec<String>) -> Result<ModuleDocs, Error> {
     let values: Vec<&str> = declared
         .groups
         .iter()
@@ -186,7 +164,7 @@ fn verified(module: &str, part: Part, declared: Declarations, actual: Vec<String
         }
         return Err(Error::contract(message));
     }
-    Ok(ModuleDocs { module: module.to_string(), part, summary: declared.summary, groups: declared.groups })
+    Ok(ModuleDocs { module: module.to_string(), summary: declared.summary, groups: declared.groups })
 }
 
 /// Parses one declarations file. Public for tests; [`docs`] is the entry point.
@@ -214,7 +192,7 @@ pub fn parse(source: &str) -> Result<Declarations, Error> {
             }
             continue;
         }
-        // A type-only import (the framework's declarations name the core's `Context`) declares
+        // A type-only import (a library's declarations naming the core's `Context`) declares
         // nothing of its own.
         if groups.is_empty() && line.starts_with("import type ") && line.ends_with(';') {
             continue;
@@ -450,8 +428,12 @@ fn string_literals(body: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// The examples' dsp declarations: the richest file the parser has to read (classes with static
+    /// members, object literals, generics, string unions).
+    const DSP: &str = include_str!("../../../examples/lib/dsp.d.ts");
+
     fn dsp() -> Declarations {
-        parse(crate::framework::file("dsp.d.ts").unwrap()).unwrap()
+        parse(DSP).unwrap()
     }
 
     fn entry<'a>(declarations: &'a Declarations, name: &str) -> &'a Entry {
@@ -466,7 +448,7 @@ mod tests {
         assert_eq!(names, ["The source contract", "Constants", "Seeds", "Randomness", "The block protocol"]);
 
         let dsp = dsp();
-        assert!(dsp.summary.starts_with("The syrinx framework's dsp module"), "{}", dsp.summary);
+        assert!(dsp.summary.starts_with("The examples' dsp module"), "{}", dsp.summary);
         let names: Vec<&str> = dsp.groups.iter().map(|g| g.name.as_str()).collect();
         assert_eq!(names, ["Scalars", "Oscillators", "Noise", "Envelopes", "Filters", "Delays and reverb", "Buffers"]);
     }
@@ -536,7 +518,7 @@ mod tests {
 
     #[test]
     fn every_declaration_lands_in_a_group() {
-        for source in [TYPES, crate::framework::file("dsp.d.ts").unwrap()] {
+        for source in [TYPES, DSP] {
             let declarations = parse(source).unwrap();
             let entries: usize = declarations.groups.iter().map(|g| g.entries.len()).sum();
             // One per `export` in the declarations file.
@@ -562,17 +544,12 @@ mod tests {
     #[test]
     fn declarations_match_the_modules() {
         // The real check: every runtime export documented, and nothing documented that is not
-        // exported, in the core and in the framework. Fails when a module and its declarations
-        // drift apart.
+        // exported, in the core. Fails when the module and its declarations drift apart.
         let docs = docs().unwrap();
-        assert_eq!(
-            docs.modules.iter().map(|m| (m.module.as_str(), m.part)).collect::<Vec<_>>(),
-            [("syrinx", Part::Core), ("framework/dsp.js", Part::Framework)]
-        );
+        assert_eq!(docs.modules.iter().map(|m| m.module.as_str()).collect::<Vec<_>>(), ["syrinx"]);
         let values = |m: &ModuleDocs| -> Vec<String> {
             m.groups.iter().flat_map(|g| g.entries.iter()).filter(|e| e.is_value()).map(|e| e.name.clone()).collect()
         };
         assert!(values(&docs.modules[0]).contains(&"inBlock".to_string()));
-        assert!(values(&docs.modules[1]).contains(&"normalize".to_string()));
     }
 }

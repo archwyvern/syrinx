@@ -3,8 +3,8 @@
 // A source is an ES module that imports from "syrinx", exports `meta` and `stems`, and may
 // default-export a function combining them. A layer, and the mix, return their samples whole or
 // as a stream the host pulls one block at a time. What the core exports is what the standard
-// needs a source to have; oscillators, filters and the rest are the framework (framework/dsp.d.ts
-// and its siblings). `syrinx types` emits these declarations; point an editor at them (a
+// needs a source to have; oscillators, filters and the rest are the project's own code.
+// `syrinx types` emits these declarations; point an editor at them (a
 // jsconfig.json, or Monaco's addExtraLib) for autocomplete and hover. Sources are plain
 // JavaScript -- the types are for tooling, not because anything is compiled from TypeScript.
 

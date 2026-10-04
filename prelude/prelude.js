@@ -4,8 +4,8 @@
 // size, the seeded randomness that stands in for Math.random, a hash for deriving seeds, and the
 // one question the block protocol lets a source ask -- is a block being computed right now?
 // Everything else a sound is made of -- oscillators, filters, envelopes, buffers -- is the
-// framework (framework/ in the syrinx repository): a library a project vendors and imports by
-// relative path. Everything here is deterministic: no wall clock, no Math.random, no I/O.
+// project's own code: its sources and the library it keeps beside them, imported by relative
+// path. Everything here is deterministic: no wall clock, no Math.random, no I/O.
 //
 // Contract (PRELUDE_VERSION 4):
 //   meta   = { api: 4, duration, name?, channels?, sampleRate?, seed?, loop? }

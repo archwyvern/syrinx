@@ -4,7 +4,7 @@ use std::time::Duration;
 use syrinx_core::{ErrorKind, RenderOptions, Target, inspect, mix_from, render, render_each};
 
 const SINE: &str = r#"
-import { Osc, render } from "./framework/dsp.js";
+import { Osc, render } from "./lib/dsp.js";
 export const meta = { api: 4, name: "sine", duration: 0.1, channels: 1 };
 export const stems = {
   sine(ctx) {
@@ -14,6 +14,9 @@ export const stems = {
 };
 "#;
 
+/// The examples' dsp module: the library the test projects import, as a project brings its own.
+const DSP: &str = include_str!("../../../examples/lib/dsp.js");
+
 fn opts() -> RenderOptions {
     RenderOptions::default()
 }
@@ -22,14 +25,15 @@ fn only(stems: &[&str]) -> RenderOptions {
     RenderOptions { target: Target::Stems(stems.iter().map(|s| s.to_string()).collect()), ..opts() }
 }
 
-/// The path of a source named `file` in a project with the framework vendored at ./framework.
-/// The host resolves an entry's imports from its path, so a source can use the framework whether
-/// or not the file itself is written. One project per test process.
+/// The path of a source named `file` in a project with a library at ./lib (the examples' dsp.js).
+/// The host resolves an entry's imports from its path, so a source can use the library whether or
+/// not the file itself is written. One project per test process.
 fn in_project(file: &str) -> String {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     let dir = DIR.get_or_init(|| {
         let dir = scratch("project");
-        syrinx_core::framework::vendor(&dir.join("framework"), "test").unwrap();
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/dsp.js"), DSP).unwrap();
         dir
     });
     dir.join(file).to_string_lossy().into_owned()
@@ -65,14 +69,14 @@ fn renders_mono_at_default_rate() {
     assert_eq!(r.stem_names, vec!["sine".to_string()]);
     assert_eq!(r.stem, None, "one layer and no mix stage: it IS the sound, not a layer of one");
     assert_eq!(r.dependencies.len(), 1, "{:?}", r.dependencies);
-    assert!(r.dependencies[0].ends_with("framework/dsp.js"), "the framework is a dependency like any import");
+    assert!(r.dependencies[0].ends_with("lib/dsp.js"), "a library is a dependency like any import");
     assert!((r.peak() - 0.5).abs() < 1e-3);
 }
 
 #[test]
 fn same_source_same_bytes() {
     let src = r#"
-import { Noise, Reverb, Biquad, Env, render, filter } from "./framework/dsp.js";
+import { Noise, Reverb, Biquad, Env, render, filter } from "./lib/dsp.js";
 export const meta = { api: 4, name: "n", duration: 0.5, channels: 2, seed: 99 };
 export const stems = {
   noise(ctx) {
@@ -94,7 +98,7 @@ export const stems = {
 // ------------------------------------------------------------------------------- stems
 
 const TWO: &str = r#"
-import { render } from "./framework/dsp.js";
+import { render } from "./lib/dsp.js";
 export const meta = { api: 4, name: "two", duration: 0.01, channels: 1 };
 export const stems = {
   a(ctx) { return render(ctx, () => 0.25); },
@@ -120,7 +124,7 @@ fn mix_is_bit_identical_to_the_sum_of_its_stems() {
 #[test]
 fn a_subset_is_summed_without_the_mix_stage() {
     let src = r#"
-import { render } from "./framework/dsp.js";
+import { render } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.01, channels: 1 };
 export const stems = {
   a(ctx) { return render(ctx, () => 0.25); },
@@ -143,7 +147,7 @@ export default function (ctx) { return ctx.stems.a[0].map((v) => v * 10); }
 #[test]
 fn the_mix_stage_receives_planes_per_stem() {
     let src = r#"
-import { render } from "./framework/dsp.js";
+import { render } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.01, channels: 2 };
 export const stems = {
   a(ctx) { return render(ctx, () => 0.25); },
@@ -212,7 +216,7 @@ fn stems_sum_in_declaration_order() {
 #[test]
 fn mix_from_previously_rendered_stems_round_trips() {
     let src = r#"
-import { render } from "./framework/dsp.js";
+import { render } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.01, channels: 2 };
 export const stems = {
   a(ctx) { return render(ctx, (t, i) => (i % 7) / 10); },
@@ -301,7 +305,7 @@ export const stems = { a(ctx) { return new Float32Array(ctx.frames); } };
 #[test]
 fn mono_return_is_duplicated_for_stereo_meta() {
     let src = r#"
-import { render } from "./framework/dsp.js";
+import { render } from "./lib/dsp.js";
 export const meta = { api: 4, duration: 0.01, channels: 2 };
 export const stems = { a(ctx) { return render(ctx, (t, i) => i); } };
 "#;
@@ -384,9 +388,10 @@ fn inspect_computes_the_geometry() {
     assert_eq!((e.kind, e.message.as_str()), (ErrorKind::Contract, "meta.duration rounds to zero frames"));
 }
 
-/// The most common mistake moving a 0.4 source to 0.9: a framework name taken from the core.
+/// The most common mistake moving a 0.4 source forward: an oscillator taken from the core, which
+/// has not provided one since 0.9.
 #[test]
-fn a_framework_name_from_the_core_is_a_compile_error_naming_it() {
+fn a_name_the_core_does_not_export_is_a_compile_error_naming_it() {
     let src = "import { Osc } from \"syrinx\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = { a: (ctx) => [] };";
     let e = render(src, "x.syr", &opts()).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Compile);
@@ -395,7 +400,7 @@ fn a_framework_name_from_the_core_is_a_compile_error_naming_it() {
 
 #[test]
 fn rejects_math_random_before_running() {
-    let src = "import { render } from \"./framework/dsp.js\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = {\n  a(ctx) {\n    return render(ctx, () => Math.random());\n  },\n};";
+    let src = "import { render } from \"./lib/dsp.js\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = {\n  a(ctx) {\n    return render(ctx, () => Math.random());\n  },\n};";
     let entry = in_project("x.syr");
     let e = render(src, &entry, &opts()).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Check);
@@ -522,10 +527,11 @@ fn contract_errors() {
 fn imports_relative_modules_and_reports_them() {
     let dir = scratch("imports");
     std::fs::create_dir_all(dir.join("lib")).unwrap();
-    syrinx_core::framework::vendor(&dir.join("framework"), "test").unwrap();
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(dir.join("lib/dsp.js"), DSP).unwrap();
     std::fs::write(
         dir.join("lib/tone.js"),
-        "import { Osc } from \"../framework/dsp.js\";\nexport function tone(sr, f) { const o = Osc.sine(sr); return () => o.next(f); }\nexport const GAIN = 0.25;\n",
+        "import { Osc } from \"../lib/dsp.js\";\nexport function tone(sr, f) { const o = Osc.sine(sr); return () => o.next(f); }\nexport const GAIN = 0.25;\n",
     )
     .unwrap();
     std::fs::write(
@@ -535,7 +541,7 @@ fn imports_relative_modules_and_reports_them() {
     .unwrap();
     let entry = dir.join("beep.syr");
     let src = r#"
-import { render } from "./framework/dsp.js";
+import { render } from "./lib/dsp.js";
 import { tone, GAIN } from "./lib/tone.js";
 import { twice } from "./lib/util.js";
 export const meta = { api: 4, duration: 0.05 };
@@ -555,10 +561,10 @@ export const stems = {
     let mut expected = vec![
         std::fs::canonicalize(dir.join("lib/tone.js")).unwrap(),
         std::fs::canonicalize(dir.join("lib/util.js")).unwrap(),
-        std::fs::canonicalize(dir.join("framework/dsp.js")).unwrap(),
+        std::fs::canonicalize(dir.join("lib/dsp.js")).unwrap(),
     ];
     expected.sort();
-    assert_eq!(deps, expected, "diamond import must load tone.js once, and the framework once for both");
+    assert_eq!(deps, expected, "diamond import must load tone.js once, and the library once for both");
 
     assert_eq!(inspect(src, entry.to_str().unwrap(), &opts()).unwrap().dependencies.len(), 3);
 }

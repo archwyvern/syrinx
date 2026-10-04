@@ -12,12 +12,13 @@ fn committed_reference_is_current() {
     );
 }
 
-/// The boundary between the standard's core module and the framework (SPEC.md, clauses 12-13).
-/// Moving a name across it changes what a conforming host must ship, so it is pinned here: a
-/// change to either list is a change to the standard, made on purpose.
+/// The standard's core module (SPEC.md, clause 12): the whole reference. Adding a name to it, or
+/// taking one away, changes what a conforming host must ship, so it is pinned here: a change to
+/// the list is a change to the standard, made on purpose.
 #[test]
-fn the_core_and_the_framework_are_exactly_these() {
+fn the_core_is_exactly_these() {
     let docs = syrinx_core::docs::docs().expect("declarations and modules agree");
+    assert_eq!(docs.modules.len(), 1, "the reference is the core module alone");
     let names = |i: usize| {
         let mut names: Vec<&str> =
             docs.modules[i].groups.iter().flat_map(|g| g.entries.iter()).map(|e| e.name.as_str()).collect();
@@ -43,49 +44,11 @@ fn the_core_and_the_framework_are_exactly_these() {
     ];
     core.sort_unstable();
     assert_eq!(names(0), core);
-    assert_eq!(docs.modules[1].module, "framework/dsp.js");
-    let mut dsp = vec![
-        "Allpass",
-        "BiquadType",
-        "Biquad",
-        "BlepOsc",
-        "Comb",
-        "Delay",
-        "Env",
-        "Envelope",
-        "Noise",
-        "OnePole",
-        "Osc",
-        "Phasor",
-        "Processor",
-        "Reverb",
-        "Shape",
-        "Svf",
-        "TAU",
-        "clamp",
-        "db",
-        "fade",
-        "filter",
-        "fold",
-        "gain",
-        "hardclip",
-        "lerp",
-        "mix",
-        "mtof",
-        "normalize",
-        "pan",
-        "place",
-        "render",
-        "softclip",
-        "stream",
-    ];
-    dsp.sort_unstable();
-    assert_eq!(names(1), dsp);
 }
 
 /// What `"syrinx"` exports at run time is the core and nothing else (SPEC.md, clause 12). The
-/// framework is imported by relative path; a name that crept back into the prelude would let a
-/// source depend on the framework without saying so.
+/// rest is imported by relative path; a name that crept back into the prelude would let a source
+/// depend on it without saying so.
 #[test]
 fn the_core_module_exports_the_core() {
     let names = syrinx_core::prelude_exports().unwrap();

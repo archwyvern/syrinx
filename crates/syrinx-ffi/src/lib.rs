@@ -533,7 +533,7 @@ mod tests {
     use super::*;
 
     const CLICK: &str = r#"
-import { Osc, Env, render, stream } from "./framework/dsp.js";
+import { Osc, Env, render, stream } from "./lib/dsp.js";
 export const meta = { api: 4, name: "click", duration: 0.06, channels: 1, seed: 3 };
 export const stems = {
   tick(ctx) { const e = Env.exp(0.002); return stream(ctx, (t) => e(t) * 0.5); },
@@ -546,11 +546,12 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
     }
 
-    /// click.syr in a project with the framework vendored beside it, as its path for the C ABI.
+    /// click.syr in a project with the examples' dsp.js as its library, as its path for the C ABI.
     fn click(test: &str) -> CString {
         let dir = std::env::temp_dir().join(format!("syrinx-ffi-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        syrinx_core::framework::vendor(&dir.join("framework"), "test").unwrap();
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib/dsp.js"), include_str!("../../../examples/lib/dsp.js")).unwrap();
         let path = dir.join("click.syr");
         std::fs::write(&path, CLICK).unwrap();
         CString::new(path.to_str().unwrap()).unwrap()
