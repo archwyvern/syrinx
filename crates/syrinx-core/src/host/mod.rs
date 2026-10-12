@@ -75,6 +75,15 @@ const RUN_ORIGIN: &str = "syrinx:run";
 const MATH_ORIGIN: &str = "syrinx:math";
 
 fn init_v8() {
+    // A libsyrinx built with V8 excluded loads librusty_v8 from beside itself; the crate's Rust
+    // side matches one V8 build only, so any other is refused here, before it is used. The
+    // static builds cannot differ (the check costs a string compare per render).
+    let found = v8::V8::get_version();
+    assert!(
+        found == crate::V8_VERSION,
+        "syrinx was built for V8 {} and the V8 it loaded reports {found}: librusty_v8 of another rusty_v8 release",
+        crate::V8_VERSION
+    );
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let platform = v8::new_default_platform(0, false).make_shared();

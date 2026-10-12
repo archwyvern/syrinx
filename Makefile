@@ -10,6 +10,10 @@
 #
 # V8 is linked statically into both binaries; the first build downloads the prebuilt V8 for the
 # host target (~100 MB, needs network), later builds do not.
+#
+# `make dist-shared` adds the third output, dist/lib-shared/libsyrinx.so: the library with V8
+# EXCLUDED, linked against the shared librusty_v8 that native-bin's Archwyvern.Natives.V8 ships
+# (RUSTY_V8_DYLIB_DIR names the directory holding it). tools/v8-shared.sh explains.
 
 CARGO ?= cargo
 PROFILE ?= release
@@ -31,7 +35,7 @@ else
   PLAYER := syrinx-player
 endif
 
-.PHONY: all build dist install uninstall install-user uninstall-user test check clean examples docs
+.PHONY: all build dist dist-shared install uninstall install-user uninstall-user test check clean examples docs
 
 all: dist
 
@@ -50,6 +54,10 @@ dist: build
 	cp prelude/run.js $(DIST)/run.js
 	cp prelude/syrinx.d.ts $(DIST)/syrinx.d.ts
 	@echo; ls -la $(DIST)/bin $(DIST)/lib
+
+# The library with V8 excluded (see the header). TARGET=x86_64-pc-windows-msvc cross-builds it.
+dist-shared:
+	PROFILE=$(PROFILE) CARGO=$(CARGO) tools/v8-shared.sh
 
 # Puts the CLI and the player on PATH (cargo's own bin directory). The shared library, header
 # and C# binding are consumed from dist/ or through native-bin, so nothing is installed

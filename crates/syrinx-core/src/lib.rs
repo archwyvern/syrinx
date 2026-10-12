@@ -60,6 +60,19 @@ pub fn v8_version() -> &'static str {
     v8::V8::get_version()
 }
 
+/// The V8 this crate is built for: what the pinned v8 crate's prebuilt reports. A build with V8
+/// excluded (tools/v8-shared.sh) refuses a shared librusty_v8 that reports anything else. Bumping
+/// the crate means updating this; the static build's test says so.
+pub const V8_VERSION: &str = "15.2.124.1-rusty";
+
+#[cfg(test)]
+mod v8_version_tests {
+    #[test]
+    fn the_pinned_crate_reports_the_recorded_version() {
+        assert_eq!(v8::V8::get_version(), super::V8_VERSION);
+    }
+}
+
 /// What a source declares about itself in `meta`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Meta {

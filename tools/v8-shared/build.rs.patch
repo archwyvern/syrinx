@@ -1,0 +1,41 @@
+The v8 crate's build script, taught to link a prebuilt shared librusty_v8 instead of embedding
+rusty_v8's static archive: RUSTY_V8_DYLIB_DIR names the directory holding librusty_v8.so
+(rusty_v8.lib, the import library, on Windows), and when it is set the script downloads nothing
+and emits a dynamic link line. Nothing in the crate's Rust side changes. tools/v8-shared.sh
+applies this to a vendored copy of the exact crate version Cargo.toml pins, under target/.
+
+--- a/build.rs
++++ b/build.rs
+@@ -75,6 +75,7 @@
+     "RUSTY_V8_MIRROR_FALLBACK",
+     "RUSTY_V8_MUSL_SYSROOT",
+     "RUSTY_V8_SKIP_DOWNLOAD",
++    "RUSTY_V8_DYLIB_DIR",
+     "RUSTY_V8_SRC_BINDING_PATH",
+     "RUSTY_V8_SRC_BINDING_URL",
+     "SCCACHE",
+@@ -148,7 +149,9 @@
+
+   print_prebuilt_src_binding_path();
+
+-  download_static_lib_binaries();
++  if env::var_os("RUSTY_V8_DYLIB_DIR").is_none() {
++    download_static_lib_binaries();
++  }
+ }
+
+ fn acquire_lock() -> LockFile {
+@@ -1679,6 +1682,13 @@
+ }
+
+ fn print_link_flags() {
++  // RUSTY_V8_DYLIB_DIR: link the prebuilt shared librusty_v8 found there
++  // (its C++ runtime is inside it), instead of the static archive.
++  if let Some(dir) = env::var_os("RUSTY_V8_DYLIB_DIR") {
++    println!("cargo:rustc-link-search=native={}", dir.to_string_lossy());
++    println!("cargo:rustc-link-lib=dylib=rusty_v8");
++    return;
++  }
+   println!("cargo:rustc-link-lib=static=rusty_v8");
+   let should_dyn_link_libcxx = env::var("CARGO_FEATURE_USE_CUSTOM_LIBCXX")
+     .is_err()

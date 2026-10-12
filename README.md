@@ -38,6 +38,24 @@ Requires a Rust toolchain. The first build downloads the prebuilt V8 for the hos
 | `prelude.js`             | the prelude (the `"syrinx"` module)                        |
 | `syrinx.d.ts`            | type declarations for editors                              |
 
+### The library with V8 excluded
+
+The CLI and `lib/libsyrinx.so` each carry V8 inside. A third output, `lib-shared/libsyrinx.so`,
+links V8 dynamically instead: the shared `librusty_v8.so` that native-bin builds from the same
+rusty_v8 release `Cargo.toml` pins (its `Archwyvern.Natives.V8` package), so a process can hold
+one V8 for every Rust native that uses the crate. The crate has no switch for that; `make
+dist-shared` patches its build script on a vendored copy under `target/shared` and builds the
+`syrinx-ffi` crate against it, leaving `Cargo.lock` and the other two outputs untouched:
+
+```sh
+RUSTY_V8_DYLIB_DIR=/path/holding/librusty_v8.so make dist-shared
+RUSTY_V8_DYLIB_DIR=/path/holding/rusty_v8.lib TARGET=x86_64-pc-windows-msvc make dist-shared
+```
+
+The library finds `librusty_v8.so` beside itself (`$ORIGIN`), and refuses a V8 of any other
+release: by symbol version at load on Linux, and by `syrinx_core::V8_VERSION` at first use on
+both. `tools/v8-shared.sh` has the details.
+
 ### Windows
 
 The V8 crate ships prebuilt libraries for `x86_64-pc-windows-msvc` only, so the Windows build

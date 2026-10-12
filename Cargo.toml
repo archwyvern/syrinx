@@ -10,14 +10,16 @@ members = [
 ]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/archwyvern/syrinx"
 publish = false
 
 [workspace.dependencies]
-v8 = "152.2"
+# Exact: dist/lib-shared links the shared librusty_v8 that native-bin builds from this very
+# release (tools/v8-shared.sh), and the crate's Rust side matches one archive only.
+v8 = "=152.2.0"
 hound = "3.5"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1"
