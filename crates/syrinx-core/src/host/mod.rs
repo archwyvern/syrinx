@@ -144,6 +144,7 @@ fn geometry(meta: &Meta, opts: &RenderOptions) -> Result<(u32, usize), Error> {
 
 /// Runs the static check and the module graph, and returns what the source declares.
 pub fn inspect(source: &str, name: &str, opts: &RenderOptions) -> Result<Inspected, Error> {
+    let opts = &opts.for_render();
     inspect_with(source, name, opts, Deadline::new(opts.timeout))
 }
 
@@ -162,6 +163,7 @@ fn inspect_with(source: &str, name: &str, opts: &RenderOptions, deadline: Deadli
 
 /// Compiles `source` to samples, per `opts.target`: a [`Stream`], drained.
 pub fn render(source: &str, name: &str, opts: &RenderOptions) -> Result<Rendered, Error> {
+    let opts = &opts.for_render();
     let mut stream = Stream::open_with(source, name, opts, Deadline::new(opts.timeout))?;
     let frames = stream.source.frames();
     let channels = stream.source.channels();
@@ -183,6 +185,7 @@ pub fn render(source: &str, name: &str, opts: &RenderOptions) -> Result<Rendered
 
 /// Renders layers whole, separately, concurrently. An empty `which` renders every layer.
 pub fn render_each(source: &str, name: &str, opts: &RenderOptions, which: &[String]) -> Result<Vec<Rendered>, Error> {
+    let opts = &opts.for_render();
     let deadline = Deadline::new(opts.timeout);
     let info = inspect_with(source, name, opts, deadline)?;
     // Separate renders in the order asked for: nothing is summed here, so the order is the
@@ -204,6 +207,7 @@ pub fn mix_from(
     opts: &RenderOptions,
     stems: &[(String, Vec<f32>)],
 ) -> Result<Rendered, Error> {
+    let opts = &opts.for_render();
     let deadline = Deadline::new(opts.timeout);
     let src = Source::open_with(source, name, opts, deadline)?;
     let frames = src.frames();
@@ -269,14 +273,14 @@ fn with_source<T>(
     let entry_path = {
         let p = Path::new(name);
         let abs = if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(p) };
-        match abs.parent().and_then(|d| std::fs::canonicalize(d).ok()) {
+        match abs.parent().and_then(|d| loader::canonical(d).ok()) {
             Some(dir) => dir.join(abs.file_name().unwrap_or_default()),
             None => abs,
         }
     };
     let root = match &opts.root {
         Some(r) => {
-            Some(std::fs::canonicalize(r).map_err(|e| Error::contract(format!("project root {}: {e}", r.display())))?)
+            Some(loader::canonical(r).map_err(|e| Error::contract(format!("project root {}: {e}", r.display())))?)
         }
         None => None,
     };
@@ -304,6 +308,7 @@ fn with_source<T>(
             origins: HashMap::new(),
             dependencies: Vec::new(),
             failure: None,
+            fallback: opts.fallback.clone(),
         })
     });
     // Globals in the loader must die before the isolate does.

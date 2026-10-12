@@ -71,6 +71,7 @@ fn with_module<T>(
             origins: HashMap::new(),
             dependencies: Vec::new(),
             failure: None,
+            fallback: None,
         })
     });
     struct Uninstall;

@@ -402,6 +402,13 @@ freed with `syrinx_render_free`; `syrinx_stream_free` stops whatever is still co
 `syrinx_stream_streaming` says whether the blocks are computed on demand or the whole sound was
 rendered at open.
 
+A host whose tree is partly elsewhere -- a game's loose files over its packed content -- calls
+`syrinx_render_with` (or `syrinx_inspect_with`, `syrinx_stream_open_with`) with a resolver: a
+relative import that is not on disk is asked of it by its path under the root, and it answers
+with `syrinx_import_supply` or not at all. A file on disk always wins, the jail and the
+determinism check apply unchanged, the module is a dependency under the path it would have on
+disk, and one render asks at most once per path (`Fallback` on `RenderOptions` in Rust).
+
 In Rust the library goes further, which is what the player is built on: `Source::open`, then
 `Source::stems` (one isolate and thread per layer, blocks pulled in order, a few computed ahead)
 and `Source::mixer` (the mix stage fed one block of every layer at a time, restartable at a

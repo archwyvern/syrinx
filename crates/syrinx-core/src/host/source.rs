@@ -59,8 +59,10 @@ pub struct Source {
 }
 
 impl Source {
-    /// Runs the static check and the module graph once.
+    /// Runs the static check and the module graph once. The source is one render: its layers and
+    /// mix stage share what a [`crate::Fallback`] answered it.
     pub fn open(source: &str, name: &str, opts: &RenderOptions) -> Result<Source, Error> {
+        let opts = &opts.for_render();
         Self::open_with(source, name, opts, Deadline::new(opts.timeout))
     }
 

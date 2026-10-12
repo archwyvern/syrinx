@@ -22,6 +22,7 @@ extern "C" {
 
 typedef struct SyrinxRender SyrinxRender;
 typedef struct SyrinxStream SyrinxStream;
+typedef struct SyrinxImport SyrinxImport;
 
 enum SyrinxErrorKind {
     SYRINX_OK = 0,
@@ -58,12 +59,41 @@ SyrinxRender *syrinx_render(const uint8_t *source, size_t source_len, const char
 SyrinxRender *syrinx_inspect(const uint8_t *source, size_t source_len, const char *name,
                              const char *root);
 
+/* A second place relative imports resolve, for a host whose tree is partly elsewhere (a game's
+ * loose files over its packed content). Called with `context`, the path under `root` of a module
+ * that is not on disk (NUL-terminated UTF-8, forward slashes, valid for the call) and `import`:
+ * to supply the module, call syrinx_import_supply(import, ...) before returning; to say there is
+ * none, return without. A file or directory on disk always wins, a path outside the root is never
+ * asked for, and with no root the resolver is never called. A supplied module is checked and
+ * recorded as a dependency like any other, under the canonical path it would have on disk.
+ * One render asks at most once per path and every stage of it gets that answer. Calls never
+ * overlap within one render but may come from any of its threads, and from several renders at
+ * once. The resolver must not unwind. */
+typedef void (*SyrinxResolver)(void *context, const char *path, SyrinxImport *import);
+
+/* From inside a resolver call: `text` (`text_len` bytes of UTF-8, not NUL-terminated; NULL when
+ * `text_len` is 0) is the module. Copied before it returns. Returns false, supplying nothing,
+ * when the text is not UTF-8; a second call replaces the first. */
+bool syrinx_import_supply(SyrinxImport *import, const uint8_t *text, size_t text_len);
+
+/* syrinx_render, syrinx_inspect and syrinx_stream_open with a resolver (NULL for none). It may
+ * be called until the render or inspect returns, or until the stream is freed. */
+SyrinxRender *syrinx_render_with(const uint8_t *source, size_t source_len, const char *name,
+                                 const char *root, uint32_t sample_rate, uint32_t timeout_ms,
+                                 SyrinxResolver resolver, void *context);
+SyrinxRender *syrinx_inspect_with(const uint8_t *source, size_t source_len, const char *name,
+                                  const char *root, SyrinxResolver resolver, void *context);
+
 /* Open `source` as a stream; arguments as for syrinx_render. `stems` is NULL or "" for the mix,
  * or a comma-separated list of layers to sum without the mix stage. Never returns NULL:
  * syrinx_stream_info says whether it opened. */
 SyrinxStream *syrinx_stream_open(const uint8_t *source, size_t source_len, const char *name,
                                  const char *root, uint32_t sample_rate, uint32_t timeout_ms,
                                  const char *stems);
+
+SyrinxStream *syrinx_stream_open_with(const uint8_t *source, size_t source_len, const char *name,
+                                      const char *root, uint32_t sample_rate, uint32_t timeout_ms,
+                                      const char *stems, SyrinxResolver resolver, void *context);
 
 /* The open result: ok or the error, meta, geometry (frames = the whole sound), dependencies
  * and layers, with no samples. Owned by the stream; do not free. */

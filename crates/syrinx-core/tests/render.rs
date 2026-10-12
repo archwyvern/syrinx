@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use syrinx_core::{ErrorKind, RenderOptions, Target, inspect, mix_from, render, render_each};
+use syrinx_core::{ErrorKind, Fallback, RenderOptions, Target, inspect, mix_from, render, render_each};
 
 const SINE: &str = r#"
 import { Osc, render } from "./lib/dsp.js";
@@ -654,4 +654,159 @@ fn renders_concurrently_from_many_threads() {
         a
     });
     assert!(first.is_some());
+}
+
+// ---------------------------------------------------------------------------------------------
+// The fallback: a second place relative imports resolve, for a host whose tree is partly elsewhere.
+
+/// A project root with `relative` written as a source; returns (root, entry path, source).
+fn fallback_project(tag: &str, relative: &str, body: &str) -> (PathBuf, String, String) {
+    let root = std::fs::canonicalize(scratch(tag)).unwrap();
+    let entry = root.join(relative);
+    std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    let src = format!("export const meta = {{ api: 4, duration: 0.01, channels: 1 }};\n{body}");
+    std::fs::write(&entry, &src).unwrap();
+    (root, entry.to_string_lossy().into_owned(), src)
+}
+
+fn with_fallback(
+    root: &std::path::Path,
+    resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+) -> RenderOptions {
+    RenderOptions { root: Some(root.to_path_buf()), fallback: Some(Fallback::new(resolve)), ..opts() }
+}
+
+#[test]
+fn a_fallback_supplies_a_module_that_is_not_on_disk() {
+    use std::sync::{Arc, Mutex};
+    let (root, entry, src) = fallback_project(
+        "fallback-supplies",
+        "sfx/a.syr",
+        "import { x } from \"./lib/gain.js\";\nexport const stems = { a: (ctx) => new Float32Array(ctx.frames).fill(x), b: (ctx) => new Float32Array(ctx.frames).fill(x) };\n",
+    );
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    let r = render(
+        &src,
+        &entry,
+        &with_fallback(&root, move |relative| {
+            log.lock().unwrap().push(relative.to_string());
+            (relative == "sfx/lib/gain.js").then(|| "export const x = 0.25;\n".to_string())
+        }),
+    )
+    .unwrap();
+
+    // Asked by its path under the root, once, though the inspection and two layers each resolved it.
+    assert_eq!(*asked.lock().unwrap(), ["sfx/lib/gain.js"]);
+    assert!(r.samples.iter().all(|&s| s == 0.5));
+    assert_eq!(r.dependencies, [root.join("sfx/lib/gain.js")]);
+}
+
+#[test]
+fn every_stage_of_a_render_gets_the_fallbacks_one_answer_and_the_next_render_asks_again() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let (root, entry, src) = fallback_project(
+        "fallback-once",
+        "a.syr",
+        "import { x } from \"./lib/gain.js\";\nexport const stems = { a: (ctx) => new Float32Array(ctx.frames).fill(x), b: (ctx) => new Float32Array(ctx.frames).fill(x) };\n",
+    );
+    let calls = Arc::new(AtomicU32::new(0));
+    let counter = calls.clone();
+    let options = with_fallback(&root, move |_| {
+        Some(format!("export const x = {};\n", counter.fetch_add(1, Ordering::SeqCst) + 1))
+    });
+
+    let first = render(&src, &entry, &options).unwrap();
+    assert!(first.samples.iter().all(|&s| s == 2.0), "both layers saw the one answer, 1");
+    let second = render(&src, &entry, &options).unwrap();
+    assert!(second.samples.iter().all(|&s| s == 4.0), "a new render asks afresh: 2, twice");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_module_on_disk_wins_over_the_fallback() {
+    let (root, entry, src) = fallback_project(
+        "fallback-disk",
+        "a.syr",
+        "import { x } from \"./lib/gain.js\";\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(x) };\n",
+    );
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("lib/gain.js"), "export const x = 0.25;\n").unwrap();
+    let r = render(&src, &entry, &with_fallback(&root, |_| Some("export const x = 0.5;\n".into()))).unwrap();
+    assert!(r.samples.iter().all(|&s| s == 0.25));
+}
+
+#[test]
+fn a_fallback_module_is_checked_and_positioned_under_its_canonical_path() {
+    let (root, entry, src) = fallback_project(
+        "fallback-checked",
+        "a.syr",
+        "import { x } from \"./lib/clock.js\";\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(x) };\n",
+    );
+    let e = render(
+        &src,
+        &entry,
+        &with_fallback(&root, |_| Some("export const x = 1;\nexport const y = Date.now();\n".into())),
+    )
+    .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Check);
+    assert_eq!(e.file.as_deref(), Some(root.join("lib/clock.js").to_str().unwrap()));
+    assert_eq!((e.line, e.column), (Some(2), Some(18)));
+}
+
+#[test]
+fn a_missing_path_is_resolved_as_realpath_would_before_the_fallback_is_asked() {
+    // "gone" does not exist, so its ".." is taken as written: the module asked for is lib/gain.js.
+    let (root, entry, src) = fallback_project(
+        "fallback-dotdot",
+        "a.syr",
+        "import { x } from \"./gone/../lib/gain.js\";\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(x) };\n",
+    );
+    let r = render(
+        &src,
+        &entry,
+        &with_fallback(&root, |relative| (relative == "lib/gain.js").then(|| "export const x = 0.5;\n".to_string())),
+    )
+    .unwrap();
+    assert!(r.samples.iter().all(|&s| s == 0.5));
+    assert_eq!(r.dependencies, [root.join("lib/gain.js")]);
+}
+
+#[test]
+fn the_fallback_is_never_asked_outside_the_root_or_without_one() {
+    use std::sync::{Arc, Mutex};
+    let (root, entry, src) = fallback_project(
+        "fallback-jail",
+        "a.syr",
+        "import { x } from \"../nowhere-beside-the-root.js\";\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(x) };\n",
+    );
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    let e = render(
+        &src,
+        &entry,
+        &with_fallback(&root, move |relative| {
+            log.lock().unwrap().push(relative.to_string());
+            Some("export const x = 1;\n".into())
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(
+        (e.kind, e.message.as_str()),
+        (ErrorKind::Compile, "cannot import \"../nowhere-beside-the-root.js\": no such file")
+    );
+
+    let inside = "import { x } from \"./lib/gain.js\";\nexport const meta = { api: 4, duration: 0.01 };\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(x) };\n";
+    let log = asked.clone();
+    let unrooted = RenderOptions {
+        fallback: Some(Fallback::new(move |relative| {
+            log.lock().unwrap().push(relative.to_string());
+            Some("export const x = 1;\n".into())
+        })),
+        ..opts()
+    };
+    let e = render(inside, &entry, &unrooted).unwrap_err();
+    assert_eq!(e.message, "cannot import \"./lib/gain.js\": no such file");
+    assert!(asked.lock().unwrap().is_empty());
 }

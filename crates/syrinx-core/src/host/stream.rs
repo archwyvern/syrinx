@@ -25,6 +25,7 @@ pub struct Stream {
 impl Stream {
     /// Opens the source and starts its layers and mix stage per `opts.target`.
     pub fn open(source: &str, name: &str, opts: &RenderOptions) -> Result<Stream, Error> {
+        let opts = &opts.for_render();
         Self::open_with(source, name, opts, Deadline::new(opts.timeout))
     }
 

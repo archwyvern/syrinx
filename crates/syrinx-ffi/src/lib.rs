@@ -10,12 +10,12 @@
 //! `syrinx_stream_next` until it returns null, each block a `SyrinxRender` of its own. A stream
 //! is used from one thread at a time; freeing it stops whatever is still computing.
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use syrinx_core::{Block, Error, ErrorKind, Meta, RenderOptions, Rendered, Stream, Target};
+use syrinx_core::{Block, Error, ErrorKind, Fallback, Meta, RenderOptions, Rendered, Stream, Target};
 
 pub struct SyrinxRender {
     ok: bool,
@@ -262,6 +262,28 @@ pub unsafe extern "C" fn syrinx_render(
     sample_rate: u32,
     timeout_ms: u32,
 ) -> *mut SyrinxRender {
+    unsafe { syrinx_render_with(source, source_len, name, root, sample_rate, timeout_ms, None, std::ptr::null_mut()) }
+}
+
+/// [`syrinx_render`] with a resolver: a relative import that is not on disk is asked of it, by
+/// its path under `root`. See [`SyrinxResolver`].
+///
+/// # Safety
+/// As for [`syrinx_render`]; `resolver` must be safe to call with `context` from any thread
+/// until this returns.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn syrinx_render_with(
+    source: *const u8,
+    source_len: usize,
+    name: *const c_char,
+    root: *const c_char,
+    sample_rate: u32,
+    timeout_ms: u32,
+    resolver: SyrinxResolver,
+    context: *mut c_void,
+) -> *mut SyrinxRender {
+    let fallback = fallback(resolver, context);
     guarded(|| {
         let (source, name) = match unsafe { read_inputs(source, source_len, name) } {
             Ok(v) => v,
@@ -271,6 +293,7 @@ pub unsafe extern "C" fn syrinx_render(
             sample_rate: if sample_rate == 0 { None } else { Some(sample_rate) },
             timeout: timeout(timeout_ms),
             root: unsafe { read_root(root) },
+            fallback,
             // The C ABI renders the mix, which is all any consumer of it has ever wanted:
             // VLC and GStreamer play a sound, and the engine bakes one artefact per source.
             ..RenderOptions::default()
@@ -294,12 +317,29 @@ pub unsafe extern "C" fn syrinx_inspect(
     name: *const c_char,
     root: *const c_char,
 ) -> *mut SyrinxRender {
+    unsafe { syrinx_inspect_with(source, source_len, name, root, None, std::ptr::null_mut()) }
+}
+
+/// [`syrinx_inspect`] with a resolver, as [`syrinx_render_with`].
+///
+/// # Safety
+/// As for [`syrinx_render_with`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn syrinx_inspect_with(
+    source: *const u8,
+    source_len: usize,
+    name: *const c_char,
+    root: *const c_char,
+    resolver: SyrinxResolver,
+    context: *mut c_void,
+) -> *mut SyrinxRender {
+    let fallback = fallback(resolver, context);
     guarded(|| {
         let (source, name) = match unsafe { read_inputs(source, source_len, name) } {
             Ok(v) => v,
             Err(e) => return *e,
         };
-        let opts = RenderOptions { root: unsafe { read_root(root) }, ..RenderOptions::default() };
+        let opts = RenderOptions { root: unsafe { read_root(root) }, fallback, ..RenderOptions::default() };
         match syrinx_core::inspect(source, &name, &opts) {
             Ok(info) => {
                 let mut out = SyrinxRender::from_meta(&info.meta);
@@ -328,6 +368,41 @@ pub unsafe extern "C" fn syrinx_stream_open(
     timeout_ms: u32,
     stems: *const c_char,
 ) -> *mut SyrinxStream {
+    unsafe {
+        syrinx_stream_open_with(
+            source,
+            source_len,
+            name,
+            root,
+            sample_rate,
+            timeout_ms,
+            stems,
+            None,
+            std::ptr::null_mut(),
+        )
+    }
+}
+
+/// [`syrinx_stream_open`] with a resolver, as [`syrinx_render_with`]. The stream is one render:
+/// its blocks share what the resolver answered, and it may be called until the stream is freed.
+///
+/// # Safety
+/// As for [`syrinx_stream_open`]; `resolver` must be safe to call with `context` from any thread
+/// until the stream is freed.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn syrinx_stream_open_with(
+    source: *const u8,
+    source_len: usize,
+    name: *const c_char,
+    root: *const c_char,
+    sample_rate: u32,
+    timeout_ms: u32,
+    stems: *const c_char,
+    resolver: SyrinxResolver,
+    context: *mut c_void,
+) -> *mut SyrinxStream {
+    let fallback = fallback(resolver, context);
     let result = catch_unwind(AssertUnwindSafe(|| {
         let (source, name) = match unsafe { read_inputs(source, source_len, name) } {
             Ok(v) => v,
@@ -344,6 +419,7 @@ pub unsafe extern "C" fn syrinx_stream_open(
             timeout: timeout(timeout_ms),
             root: unsafe { read_root(root) },
             target,
+            fallback,
         };
         match Stream::open(source, &name, &opts) {
             Ok(s) => {
@@ -432,6 +508,72 @@ pub unsafe extern "C" fn syrinx_stream_free(s: *mut SyrinxStream) {
     if !s.is_null() {
         drop(unsafe { Box::from_raw(s) });
     }
+}
+
+/// Supplies a module that is not on disk. Called with `context`, the module's path under the
+/// root (NUL-terminated UTF-8, forward slashes, owned by the library for the call) and `import`;
+/// to supply the module it calls [`syrinx_import_supply`] on `import` before returning, and to
+/// say there is none it returns without. A file or directory on disk always wins, and a path
+/// outside the root is never asked for; with no root it is never called. One render asks it at
+/// most once per path and every stage of the render gets that answer. Calls never overlap within
+/// one render, but may come from any of its threads, and from several renders at once.
+pub type SyrinxResolver =
+    Option<unsafe extern "C" fn(context: *mut c_void, path: *const c_char, import: *mut SyrinxImport)>;
+
+/// The answer a [`SyrinxResolver`] is filling in. Owned by the library; valid during the call.
+pub struct SyrinxImport {
+    text: Option<String>,
+}
+
+/// From inside a resolver call: `text` (`text_len` bytes of UTF-8, not NUL-terminated) is the
+/// module. The library copies it before returning. Returns false, supplying nothing, when the
+/// text is not UTF-8; a second call replaces the first.
+///
+/// # Safety
+/// `import` must be the pointer the resolver was handed, during its call; `text` must point to
+/// `text_len` readable bytes (it may be null when `text_len` is 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn syrinx_import_supply(import: *mut SyrinxImport, text: *const u8, text_len: usize) -> bool {
+    let Some(import) = (unsafe { import.as_mut() }) else {
+        return false;
+    };
+    let bytes: &[u8] = if text_len == 0 {
+        &[]
+    } else if text.is_null() {
+        return false;
+    } else {
+        unsafe { std::slice::from_raw_parts(text, text_len) }
+    };
+    match std::str::from_utf8(bytes) {
+        Ok(text) => {
+            import.text = Some(text.to_string());
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// The caller's context pointer, carried to whichever thread asks. The caller vouched for it.
+struct Context(*mut c_void);
+// SAFETY: the resolver's contract (see SyrinxResolver) is that it may be called from any thread.
+unsafe impl Send for Context {}
+unsafe impl Sync for Context {}
+
+impl Context {
+    fn get(&self) -> *mut c_void {
+        self.0
+    }
+}
+
+fn fallback(resolver: SyrinxResolver, context: *mut c_void) -> Option<Fallback> {
+    let resolver = resolver?;
+    let context = Context(context);
+    Some(Fallback::new(move |relative| {
+        let path = CString::new(relative).ok()?;
+        let mut import = SyrinxImport { text: None };
+        unsafe { resolver(context.get(), path.as_ptr(), &mut import) };
+        import.text
+    }))
 }
 
 /// # Safety
@@ -635,5 +777,66 @@ export default function (ctx) { return (offset, frames, { tick, body }) => tick[
         assert!(unsafe { syrinx_render_ok(info) });
         assert!(unsafe { syrinx_render_name(info) }.is_null(), "no default name: absent is NULL");
         unsafe { syrinx_render_free(info) };
+    }
+}
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::*;
+
+    /// Supplies `lib/gain.js` and records every path it is asked for, through the C ABI.
+    unsafe extern "C" fn resolve(context: *mut c_void, path: *const c_char, import: *mut SyrinxImport) {
+        let asked = unsafe { &*(context as *const std::sync::Mutex<Vec<String>>) };
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
+        asked.lock().unwrap().push(path.clone());
+        if path == "lib/gain.js" {
+            let text = b"export const x = 0.5;\n";
+            assert!(unsafe { syrinx_import_supply(import, text.as_ptr(), text.len()) });
+        }
+    }
+
+    #[test]
+    fn a_resolver_supplies_a_module_through_the_c_abi() {
+        let root = std::env::temp_dir().join(format!("syrinx-ffi-resolver-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let entry = CString::new(root.join("a.syr").to_string_lossy().into_owned()).unwrap();
+        let root_c = CString::new(root.to_string_lossy().into_owned()).unwrap();
+        let source = "import { x } from \"./lib/gain.js\";\nexport const meta = { api: 4, duration: 0.01 };\n\
+                      export const stems = { a: (ctx) => new Float32Array(ctx.frames).fill(x), b: (ctx) => new Float32Array(ctx.frames).fill(x) };\n";
+        let asked = std::sync::Mutex::new(Vec::<String>::new());
+
+        let r = unsafe {
+            syrinx_render_with(
+                source.as_ptr(),
+                source.len(),
+                entry.as_ptr(),
+                root_c.as_ptr(),
+                0,
+                0,
+                Some(resolve),
+                &asked as *const _ as *mut c_void,
+            )
+        };
+        let rendered = unsafe { &*r };
+        assert!(rendered.ok, "{}", rendered.message.to_string_lossy());
+        assert!(rendered.samples.iter().all(|&s| s == 1.0));
+        assert_eq!(*asked.lock().unwrap(), ["lib/gain.js"]);
+        assert_eq!(
+            rendered.dependencies,
+            [CString::new(root.join("lib/gain.js").to_string_lossy().into_owned()).unwrap()]
+        );
+        unsafe { syrinx_render_free(r) };
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn text_that_is_not_utf8_is_not_supplied() {
+        let mut import = SyrinxImport { text: None };
+        let bad = [0x66u8, 0xff, 0x6f];
+        assert!(!unsafe { syrinx_import_supply(&mut import, bad.as_ptr(), bad.len()) });
+        assert!(import.text.is_none());
+        assert!(unsafe { syrinx_import_supply(&mut import, std::ptr::null(), 0) });
+        assert_eq!(import.text.as_deref(), Some(""));
     }
 }

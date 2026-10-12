@@ -113,7 +113,13 @@ impl Track {
         let path = path.canonicalize().with_context(|| format!("{}", path.display()))?;
         let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let name = path.to_string_lossy().into_owned();
-        let opts = RenderOptions { sample_rate: None, timeout: RENDER_TIMEOUT, root: None, target: Target::Mix };
+        let opts = RenderOptions {
+            sample_rate: None,
+            timeout: RENDER_TIMEOUT,
+            root: None,
+            target: Target::Mix,
+            fallback: None,
+        };
         let source = Source::open(&text, &name, &opts).map_err(|e| anyhow!("{}", describe_error(&path, &e)))?;
 
         let sample_rate = source.sample_rate();

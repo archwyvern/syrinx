@@ -172,6 +172,7 @@ impl RenderArgs {
             timeout: Duration::from_secs_f64(self.timeout),
             root: self.root.clone(),
             target: if self.stems.is_empty() { Target::Mix } else { Target::Stems(self.stems.clone()) },
+            fallback: None,
         }
     }
 }

@@ -1,12 +1,15 @@
 //! Module loading: `"syrinx"` is the built-in prelude, relative specifiers are files under the
 //! project root, nothing else exists. Every user module in the graph goes through the static
-//! determinism check before it is compiled, and a module imported twice is one instance.
+//! determinism check before it is compiled, and a module imported twice is one instance. A
+//! relative import that is not on disk may come from the options' [`Fallback`], asked by its
+//! path under the root; the jail, the check and the dependency record apply to it unchanged.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::{Component, Path, PathBuf};
 
-use crate::{Error, PRELUDE};
+use crate::{Error, Fallback, PRELUDE};
 
 use super::PRELUDE_SPECIFIER;
 
@@ -25,6 +28,85 @@ pub(super) struct Loader {
     /// An error raised inside the resolve callback, carried out so the caller reports it with
     /// its own kind and position instead of V8's generic "module not found" exception.
     pub(super) failure: Option<Error>,
+    /// Supplies a module that is not on disk; asked only under `root`.
+    pub(super) fallback: Option<Fallback>,
+}
+
+/// `fs::canonicalize`, as a path a person or another program can use: on Windows the verbatim
+/// prefix it adds (`\\?\C:\...`) is taken off again where that leaves the same path, or every
+/// dependency would compare unequal to a root spelled the usual way.
+pub(super) fn canonical(path: &Path) -> io::Result<PathBuf> {
+    std::fs::canonicalize(path).map(simplified)
+}
+
+#[cfg(windows)]
+fn simplified(path: PathBuf) -> PathBuf {
+    use std::path::Prefix;
+    // Past MAX_PATH a path needs the prefix to be opened at all.
+    const MAX_PATH: usize = 260;
+    let text = path.to_string_lossy().into_owned();
+    let plain = match path.components().next() {
+        Some(Component::Prefix(p)) => match p.kind() {
+            Prefix::VerbatimDisk(_) => text.strip_prefix(r"\\?\").map(str::to_string),
+            Prefix::VerbatimUNC(..) => text.strip_prefix(r"\\?\UNC\").map(|rest| format!(r"\\{rest}")),
+            _ => None,
+        },
+        _ => None,
+    };
+    match plain {
+        Some(plain) if plain.len() < MAX_PATH => PathBuf::from(plain),
+        _ => path,
+    }
+}
+
+#[cfg(not(windows))]
+fn simplified(path: PathBuf) -> PathBuf {
+    path
+}
+
+/// The path as [`canonical`] resolves it where it exists, and as written where it does not:
+/// component by component, a link replaced by where its chain ends and `..` taken after it, as
+/// `realpath` does, so a module only a fallback supplies still has the canonical path it would
+/// have on disk. `path` is absolute.
+pub(super) fn canonical_lenient(path: &Path) -> io::Result<PathBuf> {
+    match canonical(path) {
+        Ok(p) => return Ok(p),
+        Err(e) if !matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => return Err(e),
+        Err(_) => {}
+    }
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::Normal(name) => {
+                let next = resolved.join(name);
+                resolved = if std::fs::symlink_metadata(&next).is_ok() {
+                    match canonical(&next) {
+                        Ok(p) => p,
+                        // A link to nothing: kept as written, like any other missing component.
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => next,
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    next
+                };
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// The fallback's text for a module that is not on disk, by its canonical path, or `None`. Asked
+/// only for a path under the root: one outside it is refused by the jail, never looked up.
+fn from_fallback(resolved: &Path) -> Option<String> {
+    let (root, fallback) = with_loader(|l| (l.root.clone(), l.fallback.clone()));
+    let relative = resolved.strip_prefix(root?).ok()?;
+    let relative: Vec<String> = relative.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    fallback?.ask(&relative.join("/"))
 }
 
 thread_local! {
@@ -106,12 +188,19 @@ pub(super) fn resolve_module<'s>(
 
     let base = referrer_path.parent().map(Path::to_path_buf).unwrap_or_default();
     let candidate = base.join(&spec);
-    let resolved = match std::fs::canonicalize(&candidate) {
+    let resolved = match canonical_lenient(&candidate) {
         Ok(p) => p,
-        Err(err) if matches!(err.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {
-            return fail(scope, unresolved("no such file".into()));
-        }
         Err(_) => return fail(scope, unresolved("it cannot be resolved".into())),
+    };
+    // Asked of the resolved path, whose ".." has been taken physically. A directory is on disk
+    // too: it resolves, and then it cannot be read.
+    let supplied = if resolved.exists() {
+        None
+    } else {
+        match from_fallback(&resolved) {
+            Some(text) => Some(text),
+            None => return fail(scope, unresolved("no such file".into())),
+        }
     };
     let jailed = with_loader(|l| l.root.clone());
     if let Some(root) = jailed
@@ -125,9 +214,12 @@ pub(super) fn resolve_module<'s>(
         return Some(v8::Local::new(scope, &existing));
     }
 
-    let code = match std::fs::read_to_string(&resolved) {
-        Ok(c) => c,
-        Err(_) => return fail(scope, unresolved(format!("{} cannot be read", resolved.display()))),
+    let code = match supplied {
+        Some(text) => text,
+        None => match std::fs::read_to_string(&resolved) {
+            Ok(c) => c,
+            Err(_) => return fail(scope, unresolved(format!("{} cannot be read", resolved.display()))),
+        },
     };
     let diagnostics = crate::check::check(&code);
     if !diagnostics.is_empty() {

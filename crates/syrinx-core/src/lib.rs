@@ -16,8 +16,10 @@ pub mod docs;
 mod host;
 pub mod wav;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use check::Diagnostic;
@@ -113,11 +115,71 @@ pub struct RenderOptions {
     pub root: Option<PathBuf>,
     /// What to produce.
     pub target: Target,
+    /// A second place relative imports resolve, consulted only under a `root`. See [`Fallback`].
+    pub fallback: Option<Fallback>,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        Self { sample_rate: None, timeout: Duration::from_secs(20), root: None, target: Target::Mix }
+        Self { sample_rate: None, timeout: Duration::from_secs(20), root: None, target: Target::Mix, fallback: None }
+    }
+}
+
+impl RenderOptions {
+    /// These options for one render: the same, with the fallback's answers forgotten, so a render
+    /// asks afresh and every stage of it shares what it was told.
+    pub(crate) fn for_render(&self) -> RenderOptions {
+        RenderOptions { fallback: self.fallback.as_ref().map(Fallback::fresh), ..self.clone() }
+    }
+}
+
+/// The resolver a [`Fallback`] wraps: given a module's path under the root, its text or `None`.
+pub type Resolve = dyn Fn(&str) -> Option<String> + Send + Sync;
+
+/// A second place relative imports resolve, for a host whose tree is partly elsewhere (a game's
+/// loose files over its packed content). Given the path under the root (forward slashes) of a
+/// module that is not on disk, the resolver returns the module's text, or `None` when there is
+/// none. A file or directory on disk always wins, a path outside the root is never asked for
+/// (the jail refuses it as before), and a supplied module is checked and recorded as a
+/// dependency like any other, under the canonical path it would have on disk.
+///
+/// A render asks it at most once per path, and every stage of the render -- the inspection,
+/// each layer's isolate, the mix -- gets that one answer: a resolver whose answers change could
+/// otherwise hand two layers two different modules. The answers are remembered per render, not
+/// per `Fallback`, so one set of options serves many renders. Calls never overlap within a
+/// render; they may come from any of its threads.
+#[derive(Clone)]
+pub struct Fallback {
+    resolve: Arc<Resolve>,
+    answers: Arc<Mutex<HashMap<String, Option<String>>>>,
+}
+
+impl Fallback {
+    pub fn new(resolve: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self { resolve: Arc::new(resolve), answers: Arc::default() }
+    }
+
+    /// The same resolver, nothing asked yet.
+    fn fresh(&self) -> Self {
+        Self { resolve: self.resolve.clone(), answers: Arc::default() }
+    }
+
+    /// The answer for `relative`, asking the resolver the first time. The lock is held across the
+    /// call, so two stages asking for one path at once get one answer and one call.
+    pub(crate) fn ask(&self, relative: &str) -> Option<String> {
+        let mut answers = self.answers.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(answer) = answers.get(relative) {
+            return answer.clone();
+        }
+        let answer = (self.resolve)(relative);
+        answers.insert(relative.to_string(), answer.clone());
+        answer
+    }
+}
+
+impl fmt::Debug for Fallback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Fallback")
     }
 }
 
