@@ -810,3 +810,34 @@ fn the_fallback_is_never_asked_outside_the_root_or_without_one() {
     assert_eq!(e.message, "cannot import \"./lib/gain.js\": no such file");
     assert!(asked.lock().unwrap().is_empty());
 }
+
+#[test]
+fn a_top_level_await_still_pending_is_a_runtime_failure_not_a_missing_export() {
+    // The exports after the await never ran, so reading the namespace would report `stems` as
+    // missing, which the source declares.
+    let dir = scratch("pending-await");
+    let entry = dir.join("a.syr");
+    let src = "export const meta = { api: 4, duration: 0.01 };\nawait new Promise(() => {});\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames) };\n";
+    let e = render(src, entry.to_str().unwrap(), &opts()).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Runtime);
+    assert!(e.message.starts_with("the source did not finish evaluating"), "{}", e.message);
+    assert_eq!(e.file.as_deref(), entry.to_str());
+
+    let settled = "export const meta = { api: 4, duration: 0.01 };\nconst x = await Promise.resolve(0.5);\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames).fill(x) };\n";
+    assert!(render(settled, entry.to_str().unwrap(), &opts()).unwrap().samples.iter().all(|&s| s == 0.5));
+}
+
+#[test]
+fn an_exception_v8_raises_itself_is_positioned_in_the_source() {
+    // A dynamic import is not supported, and the rejection V8 makes for it has no script of its
+    // own: it used to come out as "undefined:0:0".
+    let dir = scratch("dynamic-import");
+    std::fs::write(dir.join("g.js"), "export const g = 1;\n").unwrap();
+    let entry = dir.join("a.syr");
+    let src = "export const meta = { api: 4, duration: 0.01 };\nconst { g } = await import(\"./g.js\");\nexport const stems = { t: (ctx) => new Float32Array(ctx.frames) };\n";
+    let e = render(src, entry.to_str().unwrap(), &opts()).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Runtime);
+    assert!(e.message.starts_with("Error: Not supported"), "{}", e.message);
+    assert_eq!(e.file.as_deref(), entry.to_str());
+    assert_eq!((e.line, e.column), (Some(2), Some(15)));
+}

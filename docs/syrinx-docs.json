@@ -1,7 +1,7 @@
 {
   "schema": 4,
   "generator": "syrinx",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "api": 4,
   "apiFloor": 4,
   "blockFrames": 4096,

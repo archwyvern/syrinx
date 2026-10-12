@@ -270,6 +270,10 @@ impl Error {
         Self::of(ErrorKind::Compile, message)
     }
 
+    fn runtime(message: impl Into<String>) -> Self {
+        Self::of(ErrorKind::Runtime, message)
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self::of(ErrorKind::Internal, message)
     }

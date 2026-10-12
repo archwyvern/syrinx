@@ -60,6 +60,10 @@ const MAX_HEAP_BYTES: usize = 2048 * 1024 * 1024;
 /// whatever stack the caller happens to be on.
 const V8_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
 
+/// Frames captured with an exception V8 raises itself, enough to get past the harness to the
+/// source's own frame.
+const STACK_FRAMES: i32 = 16;
+
 /// How many blocks a streaming layer computes ahead of its consumer. Bounds memory to
 /// `layers * PREFETCH * BLOCK_FRAMES * channels` floats and keeps every layer's thread busy while
 /// the mix stage works on the block before.
@@ -297,6 +301,9 @@ fn with_source<T>(
     init_v8();
     let params = v8::CreateParams::default().heap_limits(0, MAX_HEAP_BYTES);
     let isolate = &mut v8::Isolate::new(params);
+    // So an exception V8 raises itself, with no script of its own (an unsupported dynamic
+    // import), still says where the source was: see `position_of`.
+    isolate.set_capture_stack_trace_for_uncaught_exceptions(true, STACK_FRAMES);
     let handle = isolate.thread_safe_handle();
     let guard = Guard { watchdog: Watchdog::start(handle.clone()), handle };
     guard.watchdog.arm(budget);
@@ -355,15 +362,28 @@ fn load_entry<'s>(
         return Err(caught_in(tc, ErrorKind::Compile));
     }
 
-    if module.evaluate(tc).is_none() {
+    let Some(evaluation) = module.evaluate(tc) else {
         return Err(caught_in(tc, ErrorKind::Runtime));
-    }
+    };
     if module.get_status() == v8::ModuleStatus::Errored {
         let exception = module.get_exception();
         return Err(error_from_exception(tc, exception, ErrorKind::Runtime));
     }
     if tc.has_terminated() {
         return Err(Error::timeout());
+    }
+    // The microtasks have run by now, so a top-level await that is still pending is waiting for
+    // something no render will ever do. Reading the namespace instead would report whatever the
+    // await kept from running -- usually `stems` -- as missing, which the source never said.
+    if let Ok(promise) = v8::Local::<v8::Promise>::try_from(evaluation)
+        && promise.state() == v8::PromiseState::Pending
+    {
+        let mut e = Error::runtime(
+            "the source did not finish evaluating: a top-level await was still pending once its microtasks had run, \
+             and a render waits for nothing else",
+        );
+        e.file = Some(name.to_string());
+        return Err(e);
     }
 
     let namespace = v8::Local::<v8::Object>::try_from(module.get_module_namespace())
@@ -436,19 +456,47 @@ fn caught_in(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>, kind: Er
     Error { kind, message, file, line, column, diagnostics: Vec::new() }
 }
 
-/// File/line/column of a message, unless it points into the prelude or the harness.
+/// File/line/column of a message, unless it points into the prelude or the harness. A message
+/// with no script at all is an exception V8 raised itself (an unsupported dynamic import): it is
+/// positioned at the first frame of its stack that is the source's, if any.
 fn position_of(
     scope: &mut v8::PinScope<'_, '_>,
     msg: v8::Local<v8::Message>,
 ) -> (Option<String>, Option<u32>, Option<u32>) {
-    let resource =
-        msg.get_script_resource_name(scope).and_then(|n| n.to_string(scope)).map(|n| n.to_rust_string_lossy(scope));
-    let positioned = resource.as_deref().is_some_and(|r| r != PRELUDE_SPECIFIER && r != RUN_ORIGIN && r != MATH_ORIGIN);
-    if positioned {
-        (resource, msg.get_line_number(scope).map(|l| l as u32), Some(msg.get_start_column() as u32 + 1))
-    } else {
-        (None, None, None)
+    let resource = msg.get_script_resource_name(scope).filter(|n| n.is_string()).map(|n| n.to_rust_string_lossy(scope));
+    match resource {
+        Some(r) if is_source_module(&r) => {
+            (Some(r), msg.get_line_number(scope).map(|l| l as u32), Some(msg.get_start_column() as u32 + 1))
+        }
+        Some(_) => (None, None, None),
+        None => first_source_frame(scope, msg),
     }
+}
+
+/// Whether a script is the source or one of its imports, not the prelude or the harness.
+fn is_source_module(resource: &str) -> bool {
+    resource != PRELUDE_SPECIFIER && resource != RUN_ORIGIN && resource != MATH_ORIGIN
+}
+
+fn first_source_frame(
+    scope: &mut v8::PinScope<'_, '_>,
+    msg: v8::Local<v8::Message>,
+) -> (Option<String>, Option<u32>, Option<u32>) {
+    let Some(trace) = msg.get_stack_trace(scope) else {
+        return (None, None, None);
+    };
+    for i in 0..trace.get_frame_count() {
+        let Some(frame) = trace.get_frame(scope, i) else {
+            continue;
+        };
+        let Some(script) = frame.get_script_name(scope).map(|n| n.to_rust_string_lossy(scope)) else {
+            continue;
+        };
+        if is_source_module(&script) {
+            return (Some(script), Some(frame.get_line_number() as u32), Some(frame.get_column() as u32));
+        }
+    }
+    (None, None, None)
 }
 
 /// Builds an [`Error`] from an exception value that was not caught by a TryCatch (a module
